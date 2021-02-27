@@ -6,7 +6,7 @@ authors = ["Caio Dadauto <caiodadauto@gmail.com>"]
 
 [tool.poetry.dependencies]
 python = "~3.8"
-graph-nets = {git = "https://github.com/caiodadauto/graph_nets.git", rev = "feature/recurrent_blocks"}
+graph-nets = {git = "https://github.com/caiodadauto/graph_nets.git", rev = "main"}
 tensorflow = "^2.4.1"
 
 [tool.poetry.dev-dependencies]

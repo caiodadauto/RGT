@@ -1,18 +1,23 @@
-from graph_nets.blocks import EdgeBlock, NodeBlock
+import tensorflow as tf
+import graph_nets.blocks as blocks
 from graph_nets.blocks import (
     broadcast_globals_to_edges,
     broadcast_globals_to_nodes,
     broadcast_receiver_nodes_to_edges,
     broadcast_sender_nodes_to_edges,
     _get_static_num_edges,
+    _get_static_num_nodes,
     _validate_graph,
+    EDGES,
+    NODES,
 )
 
 
-# TODO: Assess if this other modification in the concatenation has any
-#       performance improvement.
+__all__ = ["EdgeBlock", "NodeBlock"]
+
+# TODO: Assess if this concatenation modification has any performance improvement.
 class EdgeBlock(blocks.EdgeBlock):
-    def _collect_features(self, graphs):
+    def _collect_features(self, graph):
         """Collects the features of interest for edges"""
         edges_to_collect = []
 
@@ -37,7 +42,7 @@ class EdgeBlock(blocks.EdgeBlock):
 
 
 class NodeBlock(blocks.NodeBlock):
-    def _collect_features(self, graphs):
+    def _collect_features(self, graph):
         """Collects the features of interest for nodes"""
         nodes_to_collect = []
 

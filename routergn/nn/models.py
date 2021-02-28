@@ -12,6 +12,8 @@ __all__ = [
     "make_edge_tau",
     "make_node_tau",
     "make_edge_routing",
+    "make_layer_norm",
+    "make_edge_encoder_routing",
 ]
 
 
@@ -79,12 +81,27 @@ class EdgeRouting(EdgeTau):
         denominator = tf.math.unsorted_segment_sum(data, senders, num_of_nodes)
         return data / tf.gather(denominator, senders)
 
+    # TODO: The target needs to be repeted in order to reach all nodes
     def __call__(self, inputs, target, senders, num_of_nodes, is_training):
         query = self._query_model(target, is_training)
         key = self._key_model(inputs, is_training)
         value = self._value_model(inputs, is_training)
         alpha = tf.math.exp(tf.math.reduce_sum(query * key, axis=-1))
         logist_out = tf.math.exp(tf.math.reduce_sum(query * (alpha * value), axis=-1))
+        return self._sent_edges_softmax(logist_out, senders, num_of_nodes)
+
+
+class EdgeEncoderRouting(snt.Module):
+    def __init__(self, name="EdgeEncoderRouting"):
+        super(EdgeEncoderRouting, self).__init__(name=name)
+        self._linear = snt.Linear(self._hidden_size)
+
+    def _sent_edges_softmax(self, data, senders, num_of_nodes):
+        denominator = tf.math.unsorted_segment_sum(data, senders, num_of_nodes)
+        return data / tf.gather(denominator, senders)
+
+    def __call__(self, inputs, senders, num_of_nodes):
+        logist_out = self._linear(inputs)
         return self._sent_edges_softmax(logist_out, senders, num_of_nodes)
 
 
@@ -179,3 +196,11 @@ def make_edge_routing(
         value_alpha,
     )
     return EdgeRouting(key_model_fn, query_model_fn, value_model_fn)
+
+
+def make_layer_norm(axis, scale=True, offset=True):
+    return snt.LayerNorm(axis, scale, offset)
+
+
+def make_edge_encoder_routing():
+    return EdgeEncoderRouting()

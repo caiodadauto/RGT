@@ -32,31 +32,28 @@ def flow(
         list(zip(neighbor_weights[node], node_prob_links)),
         dtype=[("weight", np.int32), ("prob", np.float32)],
     )
-    next_node, next_node_idx = get_next_node(data, node_receivers)
+    while True:
+        next_node, next_node_idx = get_next_node(data, node_receivers)
+        if next_node == last_node:
+            return 0, 0, True
+        if next_node == target:
+            return 0, 0, False
 
-    if next_node == last_node:
-        return 0, 0, True
-    if next_node == target:
-        return 0, 0, False
-    else:
-        while True:
-            cost, hops, is_reverse = flow(
-                next_node,
-                target,
-                edge_weights,
-                receivers,
-                prob_links,
-                mask,
-                neighbor_weights,
-                node,
-            )
-            if is_reverse:
-                neighbor_weights[next_node_idx] += 1
-                data["weight"][next_node_idx] += 1
-            else:
-                return cost + node_edge_weights[next_node_idx], hops + 1, False
-            next_node, next_node_idx = get_next_node(data, node_receivers)
-
+        cost, hops, is_reverse = flow(
+            next_node,
+            target,
+            edge_weights,
+            receivers,
+            prob_links,
+            mask,
+            neighbor_weights,
+            node,
+        )
+        if is_reverse:
+            neighbor_weights[node][next_node_idx] += 1
+            data["weight"][next_node_idx] += 1
+        else:
+            return cost + node_edge_weights[next_node_idx], hops + 1, False
 
 def reverse_link(graph, target, edge_weights, sources=None):
     prob_links = graph.edges

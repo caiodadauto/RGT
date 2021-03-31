@@ -27,7 +27,7 @@ class LeakyReluMLP(snt.Module):
         self._hidden_size = hidden_size
         self._dropout_rate = dropout_rate
         self._num_of_layers = num_of_layers
-        for _ in range(self._num_of_extra_layers):
+        for _ in range(self._num_of_layers):
             self._linear_layers.append(snt.Linear(self._hidden_size))
 
     def __call__(self, inputs, is_training):
@@ -81,7 +81,6 @@ class EdgeRouting(EdgeTau):
         denominator = tf.math.unsorted_segment_sum(data, senders, num_of_nodes)
         return data / tf.gather(denominator, senders)
 
-    # TODO: The target needs to be repeted in order to reach all nodes
     def __call__(self, inputs, target, senders, num_of_nodes, is_training):
         query = self._query_model(target, is_training)
         key = self._key_model(inputs, is_training)
@@ -92,20 +91,20 @@ class EdgeRouting(EdgeTau):
 
 
 class EdgeEncoderRouting(snt.Module):
-    def __init__(self, name="EdgeEncoderRouting"):
+    def __init__(self, edge_model_fn, name="EdgeEncoderRouting"):
         super(EdgeEncoderRouting, self).__init__(name=name)
-        self._linear = snt.Linear(self._hidden_size)
+        self._edge_model = edge_model_fn()
 
     def _sent_edges_softmax(self, data, senders, num_of_nodes):
         denominator = tf.math.unsorted_segment_sum(data, senders, num_of_nodes)
         return data / tf.gather(denominator, senders)
 
     def __call__(self, inputs, senders, num_of_nodes):
-        logist_out = self._linear(inputs)
+        logist_out = self._edge_model(inputs)
         return self._sent_edges_softmax(logist_out, senders, num_of_nodes)
 
 
-def make_leaky_relu_mlp(hidden_size, num_of_layers, dropout_rate, alpha):
+def make_leaky_relu_mlp(hidden_size, num_of_layers, dropout_rate=0.4, alpha=0.2):
     return LeakyReluMLP(hidden_size, num_of_layers, dropout_rate, alpha)
 
 
@@ -202,5 +201,12 @@ def make_layer_norm(axis, scale=True, offset=True):
     return snt.LayerNorm(axis, scale, offset)
 
 
-def make_edge_encoder_routing():
-    return EdgeEncoderRouting()
+def make_edge_encoder_routing(hidden_size, num_of_layers, dropout_rate=0.4, alpha=0.2):
+    edge_model_fn = partial(
+        make_leaky_relu_mlp,
+        hidden_size,
+        num_of_layers,
+        dropout_rate,
+        alpha,
+    )
+    return EdgeEncoderRouting(edge_model_fn)

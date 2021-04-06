@@ -1,12 +1,8 @@
 import argparse
 
-import pytop
-
-import tensorflow as tf
-from tensorflow.compat.v1.train import polynomial_decay
 from sonnet.optimizers import Adam, Momentum
 
-from routergn.supervised.training import train
+from routergn.supervised.training import RGTOptimizer
 from routergn.supervised.models import RoutingGraphTransformer
 
 
@@ -24,12 +20,12 @@ def weights(s):
         raise argparse.ArgumentTypeError("The format has to be <w1>,<w2>")
     if len(l) != 2:
         raise argparse.ArgumentTypeError("Only two floats are allowed")
-    return tf.constant(l)
+    return l
 
 
 def run(
     train_path,
-    # validation_path,
+    validation_path,
     delta_log,
     seed,
     epochs,
@@ -40,25 +36,29 @@ def run(
     init_lr,
     last_lr,
     steps_lr,
-    polynomial_power,
+    decay_lr_start_step,
     class_weights,
+    compile,
 ):
-    batch_generator = pytop.generator.batch_files_generator(
-        train_path, batch_size, bidim_solution=False
-    )
     model = RoutingGraphTransformer(
         num_of_msg=msgs, num_of_heads_core=heads, num_of_heads_routing=heads
     )
-    global_step = tf.Variable(0, trainable=False)
-    learning_rate = polynomial_decay(
+    rgtopt = RGTOptimizer(
+        model,
+        optimizer,
+        batch_size,
+        epochs,
+        train_path,
+        validation_path,
+        last_lr,
         init_lr,
-        global_step,
-        decay_steps=steps_lr,
-        end_learning_rate=last_lr,
-        power=polynomial_power,
+        steps_lr,
+        decay_lr_start_step,
+        seed,
+        class_weights=class_weights,
+        compile=compile,
     )
-    opt = optimizer(learning_rate)
-    # train(model, opt, batch_generator, epochs, class_weights, delta_log)
+    rgtopt.train()
 
 
 if __name__ == "__main__":
@@ -68,11 +68,11 @@ if __name__ == "__main__":
         type=str,
         help="Path to the train dataset",
     )
-    # p.add_argument(
-    #    "validation_path",
-    #    type=str,
-    #    help="Path to the validation dataset",
-    # )
+    p.add_argument(
+        "validation_path",
+        type=str,
+        help="Path to the validation dataset",
+    )
     p.add_argument(
         "--delta-log",
         type=float,
@@ -85,7 +85,7 @@ if __name__ == "__main__":
         default=12345,
         help="Seed used for both random states, tensorflow and numpy",
     )
-    p.add_argument("--epochs", type=int, default=3, help="Number of epochs")
+    p.add_argument("--epochs", type=int, default=10, help="Number of epochs")
     p.add_argument(
         "--batch-size",
         type=int,
@@ -117,6 +117,12 @@ if __name__ == "__main__":
         help="Initial learning rate for polonomial decay",
     )
     p.add_argument(
+        "--decay-lr-start-step",
+        type=int,
+        default=-1,
+        help="The steps before the decay process",
+    )
+    p.add_argument(
         "--last-lr",
         type=float,
         default=5e-5,
@@ -125,21 +131,20 @@ if __name__ == "__main__":
     p.add_argument(
         "--steps-lr",
         type=float,
-        default=500000,
+        default=30000,
         help="Number of steps to decrease the initial to the final learning rate",
-    )
-    p.add_argument(
-        "--polynomial-power",
-        type=float,
-        default=3,
-        help="The degree of the polynomial function"
-        " responsible to decrease the learning rate",
     )
     p.add_argument(
         "--class-weights",
         type=weights,
-        default=tf.constant([1.0, 1.0]),
-        help="The weights for each class applied to the loss function",
+        default=[2.0, 4.0],
+        help="The weights for each class [non-routing-link, routing-link]"
+        " applied to the loss function",
+    )
+    p.add_argument(
+        "--compile",
+        action="store_true",
+        help="Compile the update and evaluation functions",
     )
     args = p.parse_args()
     run(**vars(args))

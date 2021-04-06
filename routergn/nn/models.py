@@ -8,12 +8,12 @@ __all__ = [
     "LeakyReluMLP",
     "EdgeTau",
     "NodeTau",
+    "EdgeEncoderRouting",
     "make_leaky_relu_mlp",
     "make_edge_tau",
     "make_node_tau",
     "make_edge_routing",
     "make_layer_norm",
-    "make_edge_encoder_routing",
 ]
 
 
@@ -34,7 +34,7 @@ class LeakyReluMLP(snt.Module):
         outputs_op = inputs
         for linear in self._linear_layers:
             if is_training:
-                outputs_op = tf.nn.dropout(inputs, rate=self._dropout_rate)
+                outputs_op = tf.nn.dropout(outputs_op, rate=self._dropout_rate)
             outputs_op = linear(outputs_op)
             outputs_op = tf.nn.leaky_relu(outputs_op, alpha=self._alpha)
         return outputs_op
@@ -63,8 +63,9 @@ class EdgeTau(snt.Module):
         query = self._query_model(predecessor_features, is_training)
         key = self._key_model(inputs, is_training)
         value = self._value_model(inputs, is_training)
-        alpha = tf.math.exp(tf.math.reduce_sum(query * key, axis=-1))
-        return tf.concat([tf.reshape(alpha, (-1, 1)), value], axis=-1)
+        d = tf.math.sqrt(tf.cast(key.shape[-1], tf.float32))
+        alpha = tf.math.exp(tf.math.reduce_sum(query * key, keepdims=True, axis=-1) / d)
+        return tf.concat([alpha, value], axis=-1)
 
 
 class NodeTau(snt.Module):
@@ -85,26 +86,34 @@ class EdgeRouting(EdgeTau):
         query = self._query_model(target, is_training)
         key = self._key_model(inputs, is_training)
         value = self._value_model(inputs, is_training)
-        alpha = tf.math.exp(tf.math.reduce_sum(query * key, axis=-1))
-        logist_out = tf.math.exp(tf.math.reduce_sum(query * (alpha * value), axis=-1))
+        d = tf.math.sqrt(tf.cast(key.shape[-1], tf.float32))
+        alpha = tf.math.exp(tf.math.reduce_sum(query * key, keepdims=True, axis=-1) / d)
+        logist_out = tf.math.exp(
+            tf.math.tanh(
+                tf.math.reduce_sum(query * (alpha * value), keepdims=True, axis=-1)
+            )
+        )
+        # print("OUTPUT MULTIHEAD ROUTING ENCODER ===============================")
+        # print(logist_out.numpy().sum())
+        # print("END ===============================")
         return self._sent_edges_softmax(logist_out, senders, num_of_nodes)
 
 
 class EdgeEncoderRouting(snt.Module):
-    def __init__(self, edge_model_fn, name="EdgeEncoderRouting"):
+    def __init__(self, name="EdgeEncoderRouting"):
         super(EdgeEncoderRouting, self).__init__(name=name)
-        self._edge_model = edge_model_fn()
+        self._edge_model = snt.Linear(1)
 
     def _sent_edges_softmax(self, data, senders, num_of_nodes):
         denominator = tf.math.unsorted_segment_sum(data, senders, num_of_nodes)
         return data / tf.gather(denominator, senders)
 
     def __call__(self, inputs, senders, num_of_nodes):
-        logist_out = self._edge_model(inputs)
+        logist_out = tf.math.exp(self._edge_model(inputs))
         return self._sent_edges_softmax(logist_out, senders, num_of_nodes)
 
 
-def make_leaky_relu_mlp(hidden_size, num_of_layers, dropout_rate=0.4, alpha=0.2):
+def make_leaky_relu_mlp(hidden_size, num_of_layers, dropout_rate=0.32, alpha=0.2):
     return LeakyReluMLP(hidden_size, num_of_layers, dropout_rate, alpha)
 
 
@@ -115,11 +124,11 @@ def make_edge_tau(
     query_num_of_layers,
     value_hidden_size,
     value_num_of_layers,
-    key_dropout_rate=0.4,
+    key_dropout_rate=0.32,
     key_alpha=0.2,
-    query_dropout_rate=0.4,
+    query_dropout_rate=0.32,
     query_alpha=0.2,
-    value_dropout_rate=0.4,
+    value_dropout_rate=0.32,
     value_alpha=0.2,
 ):
     key_model_fn = partial(
@@ -147,7 +156,7 @@ def make_edge_tau(
 
 
 def make_node_tau(
-    value_hidden_size, value_num_of_layers, value_dropout_rate=0.4, value_alpha=0.2
+    value_hidden_size, value_num_of_layers, value_dropout_rate=0.32, value_alpha=0.2
 ):
     value_model_fn = partial(
         make_leaky_relu_mlp,
@@ -166,11 +175,11 @@ def make_edge_routing(
     query_num_of_layers,
     value_hidden_size,
     value_num_of_layers,
-    key_dropout_rate=0.4,
+    key_dropout_rate=0.32,
     key_alpha=0.2,
-    query_dropout_rate=0.4,
+    query_dropout_rate=0.32,
     query_alpha=0.2,
-    value_dropout_rate=0.4,
+    value_dropout_rate=0.32,
     value_alpha=0.2,
 ):
     key_model_fn = partial(
@@ -201,12 +210,12 @@ def make_layer_norm(axis, scale=True, offset=True):
     return snt.LayerNorm(axis, scale, offset)
 
 
-def make_edge_encoder_routing(hidden_size, num_of_layers, dropout_rate=0.4, alpha=0.2):
-    edge_model_fn = partial(
-        make_leaky_relu_mlp,
-        hidden_size,
-        num_of_layers,
-        dropout_rate,
-        alpha,
-    )
-    return EdgeEncoderRouting(edge_model_fn)
+# def make_edge_encoder_routing(hidden_size, num_of_layers, dropout_rate=0.32, alpha=0.2):
+#     edge_model_fn = partial(
+#         make_leaky_relu_mlp,
+#         hidden_size,
+#         num_of_layers,
+#         dropout_rate,
+#         alpha,
+#     )
+#     return EdgeEncoderRouting(edge_model_fn)

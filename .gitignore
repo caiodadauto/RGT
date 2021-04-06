@@ -1,5 +1,6 @@
 dist/
 poetry.lock
+logs/
 
 # database files
 *.db

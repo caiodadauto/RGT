@@ -5,8 +5,8 @@ from datetime import datetime
 import numpy as np
 import sonnet as snt
 import tensorflow as tf
+from tqdm import tqdm
 from tqdm.auto import trange
-from tqdm.contrib.itertools import product
 from tensorflow.math import log, reduce_mean
 from sklearn.preprocessing import minmax_scale
 from sklearn.metrics import balanced_accuracy_score
@@ -29,10 +29,22 @@ def binary_cross_entropy(expected, predicted, class_weights):
     return reduce_mean(losses)
 
 
-def get_generator(path, batch_size, bidim_solution=False, edge_scaler=minmax_scale):
+def get_generator(
+    path,
+    file_ext,
+    batch_size,
+    size=None,
+    bidim_solution=False,
+    edge_scaler=minmax_scale,
+):
     return networkx_to_graph_tuple_generator(
         batch_files_generator(
-            path, batch_size, bidim_solution=bidim_solution, edge_scaler=edge_scaler
+            path,
+            file_ext,
+            batch_size,
+            dataset_size=size,
+            bidim_solution=bidim_solution,
+            edge_scaler=edge_scaler,
         )
     )
 
@@ -42,7 +54,9 @@ class RGTOptimizer(snt.Module):
         self,
         rgt,
         optimizer,
+        file_ext,
         batch_size,
+        train_size,
         num_of_epochs,
         path_to_train_data,
         path_to_validation_data,
@@ -58,6 +72,7 @@ class RGTOptimizer(snt.Module):
         log_path="logs/scalars/",
         with_op_graph=True,
         compile=False,
+        debug=False,
         root_path="",
     ):
         np.random.seed(seed)
@@ -70,6 +85,8 @@ class RGTOptimizer(snt.Module):
         self._edge_scaler = edge_scaler
         self._num_of_epochs = num_of_epochs
         self._class_weights = tf.constant(class_weights, dtype=tf.float32)
+        self._file_ext = file_ext
+        self._train_size = train_size
         self._path_to_train_data = path_to_train_data
         self._path_to_validation_data = path_to_validation_data
         self._delta_time_to_validate = delta_time_to_validate
@@ -106,8 +123,18 @@ class RGTOptimizer(snt.Module):
         self._best_ckpt_manager = tf.train.CheckpointManager(
             ckpt, os.path.join(logdir, "best_ckpts"), max_to_keep=5
         )
+        if debug:
+            tf.debugging.experimental.enable_dump_debug_info(
+                dump_root=os.path.join(logdir, "debug"),
+                tensor_debug_mode="FULL_HEALTH",
+                circular_buffer_size=-1,
+            )
+
         val_generator = get_generator(
-            self._path_to_validation_data, -1, edge_scaler=self._edge_scaler
+            self._path_to_validation_data,
+            self._file_ext,
+            -1,
+            edge_scaler=self._edge_scaler,
         )
         self._in_val_graphs, self._gt_val_graphs, self._raw_edge_val_features = next(
             val_generator
@@ -146,6 +173,8 @@ class RGTOptimizer(snt.Module):
                 )
             loss = tf.math.reduce_sum(tf.stack(loss_for_all_mps))
             loss = loss / len(output_graphs)
+        print("LOSS >>", loss, "for step", self._step)
+        print()
         gradients = tape.gradient(loss, self._model.trainable_variables)
         self._opt.apply(gradients, self._model.trainable_variables)
         self._step.assign_add(1.0)
@@ -174,25 +203,27 @@ class RGTOptimizer(snt.Module):
         for epoch in trange(self._num_of_epochs, desc="Epochs"):
             train_generator = get_generator(
                 self._path_to_train_data,
+                self._file_ext,
                 self._batch_size,
+                self._train_size,
                 edge_scaler=self._edge_scaler,
             )
-            for ((in_graphs, gt_graphs, raw_edge_features),) in product(
-                train_generator, desc="Batchs", leave=False
-            ):
-                tr_graphs, loss = self._update_model_weights(in_graphs, gt_graphs)
-                self.log_scalars({"loss": loss, "learning rate": self._lr})
-                delta_time = time() - last_validation
-                if delta_time >= self._delta_time_to_validate:
-                    val_graphs = self._eval(self._in_val_graphs)
-                    last_validation = time()
-                    tr_acc = self._get_accuracy(tr_graphs.edges, gt_graphs.edges)
-                    val_acc = self._get_accuracy(
-                        val_graphs.edges, self._gt_val_graphs.edges
-                    )
-                    self.log_scalars(
-                        {"train accuracy": tr_acc, "val accuracy": val_acc}
-                    )
-                    self._last_ckpt_manager.save()
-                    if self._best_val_acc <= val_acc:
-                        self._best_ckpt_manager.save()
+            with tqdm(total=self._train_size, desc="Graphs", leave=False) as pbar:
+                for in_graphs, gt_graphs, raw_edge_features in train_generator:
+                    tr_graphs, loss = self._update_model_weights(in_graphs, gt_graphs)
+                    self.log_scalars({"loss": loss, "learning rate": self._lr})
+                    delta_time = time() - last_validation
+                    if delta_time >= self._delta_time_to_validate:
+                        val_graphs = self._eval(self._in_val_graphs)
+                        last_validation = time()
+                        tr_acc = self._get_accuracy(tr_graphs.edges, gt_graphs.edges)
+                        val_acc = self._get_accuracy(
+                            val_graphs.edges, self._gt_val_graphs.edges
+                        )
+                        self.log_scalars(
+                            {"train accuracy": tr_acc, "val accuracy": val_acc}
+                        )
+                        self._last_ckpt_manager.save()
+                        if self._best_val_acc <= val_acc:
+                            self._best_ckpt_manager.save()
+                    pbar.update(in_graphs.n_node.shape[0])

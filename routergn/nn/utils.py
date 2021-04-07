@@ -40,7 +40,7 @@ def _nested_sum(input_graphs, field_name):
     return tree.map_structure(lambda *x: tf.math.add_n(x, name), *features_list)
 
 
-def sum(input_graphs, field_names=[EDGES, NODES, GLOBALS], name="graph_sum"):
+def sum(input_graphs, use_edges=True, use_nodes=True, use_globals=True, name="graph_sum"):
     if not input_graphs:
         raise ValueError("List argument `input_graphs` is empty")
     utils_np._check_valid_sets_of_keys([gr._asdict() for gr in input_graphs])
@@ -48,15 +48,15 @@ def sum(input_graphs, field_names=[EDGES, NODES, GLOBALS], name="graph_sum"):
         return input_graphs[0]
 
     with tf.name_scope(name):
-        if NODES in field_names:
-            nodes = _nested_sum(input_graphs, NODES)
-        else:
-            nodes = getattr(input_graphs[0], NODES)
-        if EDGES in field_names:
+        if use_edges:
             edges = _nested_sum(input_graphs, EDGES)
         else:
             edges = getattr(input_graphs[0], EDGES)
-        if GLOBALS in field_names:
+        if use_nodes:
+            nodes = _nested_sum(input_graphs, NODES)
+        else:
+            nodes = getattr(input_graphs[0], NODES)
+        if use_globals:
             globals_ = _nested_sum(input_graphs, GLOBALS)
         else:
             globals_ = getattr(input_graphs[0], GLOBALS)
@@ -90,7 +90,7 @@ def _nested_concatenate(input_graphs, field_name, axis):
 
 
 def concat(
-    input_graphs, axis, field_names=[EDGES, NODES, GLOBALS], name="graph_concat"
+    input_graphs, axis, use_edges=True, use_nodes=True, use_globals=True, name="graph_concat"
 ):
     if not input_graphs:
         raise ValueError("List argument `input_graphs` is empty")
@@ -99,15 +99,15 @@ def concat(
         return input_graphs[0]
 
     with tf.name_scope(name):
-        if NODES in field_names:
-            nodes = _nested_concatenate(input_graphs, NODES, axis)
-        else:
-            nodes = getattr(input_graphs[0], NODES)
-        if EDGES in field_names:
+        if use_edges:
             edges = _nested_concatenate(input_graphs, EDGES, axis)
         else:
             edges = getattr(input_graphs[0], EDGES)
-        if GLOBALS in field_names:
+        if use_nodes:
+            nodes = _nested_concatenate(input_graphs, NODES, axis)
+        else:
+            nodes = getattr(input_graphs[0], NODES)
+        if use_globals:
             globals_ = _nested_concatenate(input_graphs, GLOBALS, axis)
         else:
             globals_ = getattr(input_graphs[0], GLOBALS)

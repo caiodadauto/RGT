@@ -24,8 +24,10 @@ def weights(s):
 
 
 def run(
+    train_size,
     train_path,
     validation_path,
+    file_ext,
     delta_log,
     seed,
     epochs,
@@ -40,6 +42,7 @@ def run(
     class_weights,
     compile,
     root_path,
+    debug,
 ):
     model = RoutingGraphTransformer(
         num_of_msg=msgs, num_of_heads_core=heads, num_of_heads_routing=heads
@@ -47,7 +50,9 @@ def run(
     rgtopt = RGTOptimizer(
         model,
         optimizer,
+        file_ext,
         batch_size,
+        train_size,
         epochs,
         train_path,
         validation_path,
@@ -59,12 +64,18 @@ def run(
         class_weights=class_weights,
         compile=compile,
         root_path=root_path,
+        debug=debug,
     )
     rgtopt.train()
 
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
+    p.add_argument(
+        "train_size",
+        type=int,
+        help="Size of training data",
+    )
     p.add_argument(
         "train_path",
         type=str,
@@ -74,6 +85,12 @@ if __name__ == "__main__":
         "validation_path",
         type=str,
         help="Path to the validation dataset",
+    )
+    p.add_argument(
+        "--file-ext",
+        type=str,
+        default="gpickle",
+        help="Extension of the data files",
     )
     p.add_argument(
         "--delta-log",
@@ -91,7 +108,7 @@ if __name__ == "__main__":
     p.add_argument(
         "--batch-size",
         type=int,
-        default=128,
+        default=32,
         help="Batch size to be used in the training",
     )
     p.add_argument(
@@ -115,13 +132,13 @@ if __name__ == "__main__":
     p.add_argument(
         "--init-lr",
         type=float,
-        default=5e-3,
+        default=1e-2,
         help="Initial learning rate for polonomial decay",
     )
     p.add_argument(
         "--decay-lr-start-step",
         type=int,
-        default=-1,
+        default=50,
         help="The steps before the decay process",
     )
     p.add_argument(
@@ -152,6 +169,11 @@ if __name__ == "__main__":
         "--compile",
         action="store_true",
         help="Compile the update and evaluation functions",
+    )
+    p.add_argument(
+        "--debug",
+        action="store_true",
+        help="Apply `enable_dump_debug_info`",
     )
     args = p.parse_args()
     run(**vars(args))

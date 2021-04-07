@@ -146,8 +146,8 @@ class RoutingGraphTransformer(snt.Module):
             graphs, edge_model_kwargs=kwargs, node_model_kwargs=kwargs
         )
         # print("After Encoder Input ===============================")
-        # print(graphs_out.nodes.shape)
-        # print(graphs_out.nodes.numpy().sum())
+        # print(graphs_out.edges.shape)
+        # print(graphs_out.edges.numpy().sum())
         # print("END ===============================")
         for _ in range(self._num_of_msg):
             heads_out = []
@@ -155,20 +155,20 @@ class RoutingGraphTransformer(snt.Module):
                 heads_out.append(
                     gtt(graphs_out, edge_model_kwargs=kwargs, node_model_kwargs=kwargs)
                 )
-            heads_out = utils.concat(heads_out, axis=-1, field_names=[EDGES, NODES])
+            heads_out = utils.concat(heads_out, axis=-1, use_globals=False)
             # print("After Concat <MSG {}>===============================".format(i))
-            # print(heads_out.nodes.shape)
-            # print(heads_out.nodes.numpy().sum())
+            # print(heads_out.edges.shape)
+            # print(heads_out.edges.numpy().sum())
             # print("END ===============================")
             heads_out = self._encoder_multi_head_gtt(heads_out)
             # print("After Encoder <MSG {}>===============================".format(i))
-            # print(heads_out.nodes.shape)
-            # print(heads_out.nodes.numpy().sum())
+            # print(heads_out.edges.shape)
+            # print(heads_out.edges.numpy().sum())
             # print("END ===============================")
-            residual_connection = utils.sum([heads_out, graphs_out], [EDGES, NODES])
+            residual_connection = utils.sum([heads_out, graphs_out], use_globals=False)
             # print("After Residual <MSG {}>===============================".format(i))
-            # print(residual_connection.nodes)
-            # print(residual_connection.nodes.numpy().sum())
+            # print(residual_connection.edges.shape)
+            # print(residual_connection.edges.numpy().sum())
             # print("END ===============================")
             all_graphs_out.append(self._layer_norm_gtt(residual_connection))
             # print(i)
@@ -179,7 +179,7 @@ class RoutingGraphTransformer(snt.Module):
         heads_out = []
         for gr in self._gr_heads:
             heads_out.append(gr(graphs, edge_model_kwargs=kwargs))
-        heads_out = utils.concat(heads_out, axis=-1, field_names=[EDGES, NODES])
+        heads_out = utils.concat(heads_out, axis=-1, use_globals=False)
         # print("After Concat <ROUTING>===============================")
         # print(heads_out.edges.shape)
         # print(heads_out.edges.numpy().sum())

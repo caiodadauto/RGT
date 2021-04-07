@@ -39,6 +39,7 @@ def run(
     decay_lr_start_step,
     class_weights,
     compile,
+    root_path,
 ):
     model = RoutingGraphTransformer(
         num_of_msg=msgs, num_of_heads_core=heads, num_of_heads_routing=heads
@@ -57,6 +58,7 @@ def run(
         seed,
         class_weights=class_weights,
         compile=compile,
+        root_path=root_path,
     )
     rgtopt.train()
 
@@ -140,6 +142,11 @@ if __name__ == "__main__":
         default=[2.0, 4.0],
         help="The weights for each class [non-routing-link, routing-link]"
         " applied to the loss function",
+    )
+    p.add_argument(
+        "--root-path",
+        default="",
+        help="A root for the path where the tensorboard will save the assets",
     )
     p.add_argument(
         "--compile",

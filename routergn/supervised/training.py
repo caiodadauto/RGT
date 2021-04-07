@@ -58,6 +58,7 @@ class RGTOptimizer(snt.Module):
         log_path="logs/scalars/",
         with_op_graph=True,
         compile=False,
+        root_path="",
     ):
         np.random.seed(seed)
         tf.random.set_seed(seed)
@@ -90,7 +91,9 @@ class RGTOptimizer(snt.Module):
         self._step = tf.Variable(
             0, trainable=False, dtype=tf.float32, name="train_step"
         )
-        logdir = os.path.join(log_path, datetime.now().strftime("%Y%m%d-%H%M%S"))
+        logdir = os.path.join(
+            root_path, log_path, datetime.now().strftime("%Y%m%d-%H%M%S")
+        )
         self._writer_scalars = tf.summary.create_file_writer(
             os.path.join(logdir + "/metrics")
         )
@@ -98,10 +101,10 @@ class RGTOptimizer(snt.Module):
             step=self._step, optimizer=self._opt, net=self._model
         )
         self._last_ckpt_manager = tf.train.CheckpointManager(
-            ckpt, os.path.join(logdir, "last_ckpts"), max_to_keep=3
+            ckpt, os.path.join(logdir, "last_ckpts"), max_to_keep=5
         )
         self._best_ckpt_manager = tf.train.CheckpointManager(
-            ckpt, os.path.join(logdir, "best_ckpts"), max_to_keep=3
+            ckpt, os.path.join(logdir, "best_ckpts"), max_to_keep=5
         )
         val_generator = get_generator(
             self._path_to_validation_data, -1, edge_scaler=self._edge_scaler

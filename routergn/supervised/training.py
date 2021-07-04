@@ -19,6 +19,46 @@ from routergn.nn.utils import networkx_to_graph_tuple_generator
 __all__ = ["RGTOptimizer"]
 
 
+# default_independent_hs = 16
+# default_independent_nl = 4
+# default_norm_axis = -1
+# default_gtt_hs = 16
+# default_gtt_nl = 4
+# default_gr_hs = 8
+# default_gr_nl = 4
+# default_independent_kwargs = dict(
+#     hidden_size=default_independent_hs, num_of_layers=default_independent_nl
+# )
+# default_start_independent_kwargs = dict(
+#     hidden_size=default_independent_hs,
+#     num_of_layers=default_independent_nl,
+#     dropout_rate=0.0,
+# )
+# default_norm_kwargs = dict(axis=default_norm_axis)
+# default_edge_gtt_kwargs = dict(
+#     key_hidden_size=default_gtt_hs,
+#     key_num_of_layers=default_gtt_nl,
+#     query_hidden_size=default_gtt_hs,
+#     query_num_of_layers=default_gtt_nl,
+#     value_hidden_size=default_gtt_hs,
+#     value_num_of_layers=default_gtt_nl,
+# )
+# default_node_gtt_kwargs = dict(
+#     value_hidden_size=default_gtt_hs,
+#     value_num_of_layers=default_gtt_nl,
+# )
+# default_gr_kwargs = dict(
+#     key_hidden_size=default_gr_hs,
+#     key_num_of_layers=default_gr_nl,
+#     query_hidden_size=default_gr_hs,
+#     query_num_of_layers=default_gr_nl,
+#     value_hidden_size=default_gr_hs,
+#     value_num_of_layers=default_gr_nl,
+# )
+# 
+
+
+
 def binary_cross_entropy(expected, predicted, class_weights):
     epsilon = 1e-7
     losses = -1 * (

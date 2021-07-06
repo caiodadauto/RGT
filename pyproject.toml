@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "routergn"
+name = "rgt"
 version = "0.1.0"
 description = ""
 authors = ["Caio Dadauto <caiodadauto@gmail.com>"]

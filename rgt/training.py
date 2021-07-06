@@ -4,89 +4,16 @@ from datetime import datetime
 
 import numpy as np
 import sonnet as snt
-import tensorflow as tf
 from tqdm import tqdm
-from tqdm.auto import trange
-from tensorflow.math import log, reduce_mean
+import tensorflow as tf
 from sklearn.preprocessing import minmax_scale
 from sklearn.metrics import balanced_accuracy_score
 from graph_nets.utils_tf import specs_from_graphs_tuple
+from gn_contrib.train import binary_crossentropy
 
-from pytop.generator import batch_files_generator
-from routergn.nn.utils import networkx_to_graph_tuple_generator
-
+from rgt.utils import init_generator
 
 __all__ = ["RGTOptimizer"]
-
-
-# default_independent_hs = 16
-# default_independent_nl = 4
-# default_norm_axis = -1
-# default_gtt_hs = 16
-# default_gtt_nl = 4
-# default_gr_hs = 8
-# default_gr_nl = 4
-# default_independent_kwargs = dict(
-#     hidden_size=default_independent_hs, num_of_layers=default_independent_nl
-# )
-# default_start_independent_kwargs = dict(
-#     hidden_size=default_independent_hs,
-#     num_of_layers=default_independent_nl,
-#     dropout_rate=0.0,
-# )
-# default_norm_kwargs = dict(axis=default_norm_axis)
-# default_edge_gtt_kwargs = dict(
-#     key_hidden_size=default_gtt_hs,
-#     key_num_of_layers=default_gtt_nl,
-#     query_hidden_size=default_gtt_hs,
-#     query_num_of_layers=default_gtt_nl,
-#     value_hidden_size=default_gtt_hs,
-#     value_num_of_layers=default_gtt_nl,
-# )
-# default_node_gtt_kwargs = dict(
-#     value_hidden_size=default_gtt_hs,
-#     value_num_of_layers=default_gtt_nl,
-# )
-# default_gr_kwargs = dict(
-#     key_hidden_size=default_gr_hs,
-#     key_num_of_layers=default_gr_nl,
-#     query_hidden_size=default_gr_hs,
-#     query_num_of_layers=default_gr_nl,
-#     value_hidden_size=default_gr_hs,
-#     value_num_of_layers=default_gr_nl,
-# )
-# 
-
-
-
-def binary_cross_entropy(expected, predicted, class_weights):
-    epsilon = 1e-7
-    losses = -1 * (
-        expected * log(predicted + epsilon)
-        + (1 - expected) * log(1 - predicted + epsilon)
-    )
-    losses = tf.gather(class_weights, tf.cast(expected, tf.int32)) * losses
-    return reduce_mean(losses)
-
-
-def get_generator(
-    path,
-    file_ext,
-    batch_size,
-    size=None,
-    bidim_solution=False,
-    edge_scaler=minmax_scale,
-):
-    return networkx_to_graph_tuple_generator(
-        batch_files_generator(
-            path,
-            file_ext,
-            batch_size,
-            dataset_size=size,
-            bidim_solution=bidim_solution,
-            edge_scaler=edge_scaler,
-        )
-    )
 
 
 class RGTOptimizer(snt.Module):
@@ -106,8 +33,8 @@ class RGTOptimizer(snt.Module):
         decay_lr_start_step,
         seed,
         class_weights=[1.0, 1.0],
-        loss_fn=binary_cross_entropy,
-        edge_scaler=minmax_scale,
+        loss_fn=binary_crossentropy,
+        scaler=minmax_scale,
         delta_time_to_validate=30,
         log_path="logs/scalars/",
         with_op_graph=True,
@@ -118,14 +45,15 @@ class RGTOptimizer(snt.Module):
         np.random.seed(seed)
         tf.random.set_seed(seed)
         super(RGTOptimizer, self).__init__(name="RGTOptimizer")
+        self._rs = np.random.RandomState(seed)
         self._model = rgt
         self._best_val_acc = 0
+        self._file_ext = file_ext
+        self._scaler = scaler
         self._loss_fn = loss_fn
         self._batch_size = batch_size
-        self._edge_scaler = edge_scaler
         self._num_of_epochs = num_of_epochs
         self._class_weights = tf.constant(class_weights, dtype=tf.float32)
-        self._file_ext = file_ext
         self._train_size = train_size
         self._path_to_train_data = path_to_train_data
         self._path_to_validation_data = path_to_validation_data
@@ -170,11 +98,13 @@ class RGTOptimizer(snt.Module):
                 circular_buffer_size=-1,
             )
 
-        val_generator = get_generator(
+        # TODO: Add batch_size for validation
+        val_generator = init_generator(
             self._path_to_validation_data,
-            self._file_ext,
             -1,
-            edge_scaler=self._edge_scaler,
+            self._scaler,
+            self._rs,
+            self._file_ext,
         )
         self._in_val_graphs, self._gt_val_graphs, self._raw_edge_val_features = next(
             val_generator
@@ -240,13 +170,14 @@ class RGTOptimizer(snt.Module):
     def train(self):
         start_time = time()
         last_validation = start_time
-        for epoch in trange(self._num_of_epochs, desc="Epochs"):
-            train_generator = get_generator(
+        for epoch in tqdm(self._num_of_epochs, desc="Epochs"):
+            train_generator = init_generator(
                 self._path_to_train_data,
-                self._file_ext,
                 self._batch_size,
-                self._train_size,
-                edge_scaler=self._edge_scaler,
+                self._scaler,
+                self._rs,
+                self._file_ext,
+                size=self._train_size,
             )
             with tqdm(total=self._train_size, desc="Graphs", leave=False) as pbar:
                 for in_graphs, gt_graphs, raw_edge_features in train_generator:

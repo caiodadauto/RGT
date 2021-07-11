@@ -41,11 +41,11 @@ class GraphRouter(snt.Module):
 
 
 class EdgeRouting(EdgeTau):
-    def _sent_edges_softmax(self, data, senders, num_of_nodes):
-        denominator = tf.math.unsorted_segment_sum(data, senders, num_of_nodes)
+    def _sent_edges_softmax(self, data, senders, num_nodes):
+        denominator = tf.math.unsorted_segment_sum(data, senders, num_nodes)
         return data / tf.gather(denominator, senders)
 
-    def __call__(self, inputs, target, senders, num_of_nodes, is_training):
+    def __call__(self, inputs, target, senders, num_nodes, is_training):
         query = self._query_model(target, is_training)
         key = self._key_model(inputs, is_training)
         value = self._value_model(inputs, is_training)
@@ -62,7 +62,7 @@ class EdgeRouting(EdgeTau):
         # print("OUTPUT MULTIHEAD ROUTING ENCODER ===============================")
         # print(logist_out.numpy().sum())
         # print("END ===============================")
-        return self._sent_edges_softmax(logist_out, senders, num_of_nodes)
+        return self._sent_edges_softmax(logist_out, senders, num_nodes)
 
 
 class EdgeEncoderRouting(snt.Module):
@@ -70,13 +70,13 @@ class EdgeEncoderRouting(snt.Module):
         super(EdgeEncoderRouting, self).__init__(name=name)
         self._edge_model = edge_model_fn()
 
-    def _sent_edges_softmax(self, data, senders, num_of_nodes):
-        denominator = tf.math.unsorted_segment_sum(data, senders, num_of_nodes)
+    def _sent_edges_softmax(self, data, senders, num_nodes):
+        denominator = tf.math.unsorted_segment_sum(data, senders, num_nodes)
         return data / tf.gather(denominator, senders)
 
-    def __call__(self, inputs, senders, num_of_nodes):
+    def __call__(self, inputs, senders, num_nodes):
         logist_out = tf.math.exp(self._edge_model(inputs))
-        return self._sent_edges_softmax(logist_out, senders, num_of_nodes)
+        return self._sent_edges_softmax(logist_out, senders, num_nodes)
 
 
 def make_edge_routing(
@@ -108,7 +108,9 @@ def make_edge_routing(
         value_dropout_rate,
         value_alpha,
     )
-    return EdgeRouting(key_model_fn, query_model_fn, value_model_fn)
+    return EdgeRouting(
+        key_model_fn, query_model_fn, value_model_fn, 0, key_hidden_sizes[-1]
+    )
 
 
 def make_edge_encoder_routing(hidden_sizes, dropout_rate=0.32, alpha=0.2):
@@ -121,20 +123,108 @@ def make_edge_encoder_routing(hidden_sizes, dropout_rate=0.32, alpha=0.2):
     return EdgeEncoderRouting(edge_model_fn)
 
 
+class CoreTransformer:
+    def __init__(
+        self,
+        num_heads,
+        edge_model_kwargs,
+        node_model_kwargs,
+        embed_multi_head_kwargs,
+        layer_norm_kwargs,
+        edge_model_fn=make_edge_tau,
+        node_model_fn=make_node_tau,
+        layer_norm_fn=make_layer_norm,
+        name="RoutingGraphTransformer",
+    ):
+        super(RoutingGraphTransformer, self).__init__(name=name)
+        edge_model_fn = partial(edge_model_fn, **edge_model_kwargs)
+        node_model_fn = partial(node_model_fn, **node_model_kwargs)
+        layer_norm_fn = partial(make_layer_norm, **layer_norm_kwargs)
+
+        self._heads = []
+        for _ in range(num_heads):
+            self._heads.append(
+                GraphTopologyTranformer(
+                    edge_model_fn=edge_model_fn, node_model_fn=node_model_fn
+                )
+            )
+        self._embedding_multi_head = GraphIndependent(
+            edge_model_fn=lambda: snt.Linear(
+                embed_multi_head_kwargs["edge_dim"],
+                name="edge_embedding_multi_head_core",
+            ),
+            node_model_fn=lambda: snt.Linear(
+                embed_multi_head_kwargs["node_dim"],
+                name="node_embedding_multi_head_core",
+            ),
+        )
+        self._layer_norm = GraphIndependent(
+            edge_model_fn=layer_norm_fn, node_model_fn=layer_norm_fn
+        )
+
+        def __call__(self, graphs, kwargs):
+            heads_out = []
+            for gtt in self._gtt_heads:
+                heads_out.append(
+                    gtt(graphs, edge_model_kwargs=kwargs, node_model_kwargs=kwargs)
+                )
+            heads_out = utils.concat(heads_out, axis=-1, use_globals=False)
+            heads_out = self._embedding_multi_head(heads_out)
+            residual_connection = utils.sum([heads_out, graphs], use_globals=False)
+            return self._layer_norm(residual_connection)
+
+
+class LinkTransformer:
+    def __init__(
+        self,
+        num_heads,
+        edge_model_kwargs,
+        embed_multi_head_kwargs,
+        edge_model_fn=make_edge_routing,
+        name="RoutingGraphTransformer",
+    ):
+        super(RoutingGraphTransformer, self).__init__(name=name)
+        edge_model_fn = partial(edge_model_fn, **edge_model_kwargs)
+        embedding_model_fn = partial(
+            make_edge_encoder_routing, **embed_multi_head_kwargs
+        )
+
+        self._heads = []
+        for _ in range(num_heads):
+            self._gr_heads.append(GraphRouter(edge_model_fn=edge_model_fn))
+        self._embedding_multi_head = GraphIndependent(edge_model_fn=embedding_model_fn)
+
+    def __call__(self, graphs, kwargs):
+        heads_out = []
+        for gr in self._heads:
+            heads_out.append(gr(graphs, edge_model_kwargs=kwargs))
+        heads_out = utils.concat(heads_out, axis=-1, use_globals=False)
+        graphs = self._encoder_multi_head_gr(
+            heads_out,
+            edge_model_kwargs=dict(
+                senders=kwargs["senders"],
+                num_nodes=kwargs["num_nodes"],
+            ),
+        )
+        return graphs
+
+
 class RoutingGraphTransformer(snt.Module):
     def __init__(
         self,
-        num_of_msg,
-        num_of_heads_core,
-        num_of_heads_routing,
-        edge_gr_kwargs,
-        edge_gtt_kwargs,
-        node_gtt_kwargs,
-        edge_multi_head_kwargs,
-        node_multi_head_kwargs,
+        num_msg,
+        num_heads_core,
+        num_heads_routing,
+        dept_core,
+        dept_routing,
         edge_encoder_kwargs,
         node_encoder_kwargs,
-        layer_norm_kwargs,
+        edge_gtt_kwargs,
+        node_gtt_kwargs,
+        edge_gr_kwargs,
+        embed_core_multi_head_kwargs,
+        embed_routing_multi_head_kwargs,
+        layer_norm_gtt_kwargs,
         edge_independent_fn=make_leaky_relu_mlp,
         node_independent_fn=make_leaky_relu_mlp,
         edge_gtt_fn=make_edge_tau,
@@ -149,94 +239,58 @@ class RoutingGraphTransformer(snt.Module):
         edge_gtt_fn = partial(edge_gtt_fn, **edge_gtt_kwargs)
         node_gtt_fn = partial(node_gtt_fn, **node_gtt_kwargs)
         edge_gr_fn = partial(edge_gr_fn, **edge_gr_kwargs)
-        layer_norm_fn = partial(make_layer_norm, **layer_norm_kwargs)
+        layer_norm_gtt_fn = partial(make_layer_norm, **layer_norm_gtt_kwargs)
 
         self._gr_heads = []
         self._gtt_heads = []
-        self._num_of_msg = num_of_msg
+        self._num_msg = num_msg
         self._encoder = GraphIndependent(
             edge_model_fn=edge_independent_fn,
             node_model_fn=node_independent_fn,
         )
-        for _ in range(num_of_heads_core):
-            self._gtt_heads.append(
-                GraphTopologyTranformer(
-                    edge_model_fn=edge_gtt_fn, node_model_fn=node_gtt_fn
+        self._core_transformers = []
+        self._routing_transformers = []
+        for _ in range(dept_core):
+            self._core_transformers.append(
+                CoreTransformer(
+                    num_heads_core,
+                    edge_gtt_kwargs,
+                    node_gtt_kwargs,
+                    embed_core_multi_head_kwargs,
+                    layer_norm_gtt_kwargs,
+                    edge_gtt_fn,
+                    node_gtt_fn,
+                    layer_norm_gtt_fn,
                 )
             )
-        for _ in range(num_of_heads_routing):
-            self._gr_heads.append(GraphRouter(edge_model_fn=edge_gr_fn))
-        self._encoder_multi_head_gtt = GraphIndependent(
-            edge_model_fn=lambda: snt.Linear(
-                edge_multi_head_kwargs["gtt_hidden_size"], name="edge_encoder_gtt"
-            ),
-            node_model_fn=lambda: snt.Linear(
-                node_multi_head_kwargs["gtt_hidden_size"], name="node_encoder_gtt"
-            ),
-        )
-        self._encoder_multi_head_gr = GraphIndependent(edge_model_fn=EdgeEncoderRouting)
-        self._layer_norm_gtt = GraphIndependent(
-            edge_model_fn=layer_norm_fn, node_model_fn=layer_norm_fn
-        )
+        for _ in range(dept_routing):
+            self._routing_transformers.append(
+                LinkTransformer(
+                    num_heads_routing,
+                    edge_gr_kwargs,
+                    embed_routing_multi_head_kwargs,
+                    edge_gr_fn,
+                )
+            )
 
-    def update_num_of_msg(self, num_of_msg):
-        self._num_of_msg = num_of_msg
+    def update_num_msg(self, num_msg):
+        self._num_msg = num_msg
 
     def spread_msg(self, graphs, kwargs):
         all_graphs_out = []
         graphs_out = self._encoder(
             graphs, edge_model_kwargs=kwargs, node_model_kwargs=kwargs
         )
-        # print("After Encoder Input ===============================")
-        # print(graphs_out.edges.shape)
-        # print(graphs_out.edges.numpy().sum())
-        # print("END ===============================")
-        for _ in range(self._num_of_msg):
-            heads_out = []
-            for gtt in self._gtt_heads:
-                heads_out.append(
-                    gtt(graphs_out, edge_model_kwargs=kwargs, node_model_kwargs=kwargs)
-                )
-            heads_out = utils.concat(heads_out, axis=-1, use_globals=False)
-            # print("After Concat <MSG {}>===============================".format(i))
-            # print(heads_out.edges.shape)
-            # print(heads_out.edges.numpy().sum())
-            # print("END ===============================")
-            heads_out = self._encoder_multi_head_gtt(heads_out)
-            # print("After Encoder <MSG {}>===============================".format(i))
-            # print(heads_out.edges.shape)
-            # print(heads_out.edges.numpy().sum())
-            # print("END ===============================")
-            residual_connection = utils.sum([heads_out, graphs_out], use_globals=False)
-            # print("After Residual <MSG {}>===============================".format(i))
-            # print(residual_connection.edges.shape)
-            # print(residual_connection.edges.numpy().sum())
-            # print("END ===============================")
-            all_graphs_out.append(self._layer_norm_gtt(residual_connection))
-            # print(i)
-            graphs_out = all_graphs_out[-1]
+        for _ in range(self._num_msg):
+            for core_model in self._core_transformers:
+                graphs_out = core_model(graphs_out, kwargs)
+            all_graphs_out.append(graphs_out)
         return all_graphs_out
 
     def route(self, graphs, kwargs):
-        heads_out = []
-        for gr in self._gr_heads:
-            heads_out.append(gr(graphs, edge_model_kwargs=kwargs))
-        heads_out = utils.concat(heads_out, axis=-1, use_globals=False)
-        # print("After Concat <ROUTING>===============================")
-        # print(heads_out.edges.shape)
-        # print(heads_out.edges.numpy().sum())
-        # print("END ===============================")
-        graphs_out = self._encoder_multi_head_gr(
-            heads_out,
-            edge_model_kwargs=dict(
-                senders=kwargs["senders"],
-                num_of_nodes=kwargs["num_of_nodes"],
-            ),
-        )
-        # print("After Encoder <ROUTING>===============================")
-        # print(graphs_out.edges.shape)
-        # print(graphs_out.edges.numpy().sum())
-        # print("END ===============================")
+        graphs_out = graphs
+        for routing_model in self._routing_transformers:
+            graphs_out = routing_model(graphs_out, kwargs)
         return graphs_out
 
     def __call__(self, graphs, targets, is_training):
@@ -244,11 +298,9 @@ class RoutingGraphTransformer(snt.Module):
         repeated_targets = repeat(targets, graphs.n_edge)
         kwargs = {"is_training": is_training}
         senders = graphs.senders
-        num_of_nodes = tf.math.reduce_sum(graphs.n_node)
+        num_nodes = tf.math.reduce_sum(graphs.n_node)
         all_graphs_out = self.spread_msg(graphs, kwargs)
-        kwargs.update(
-            target=repeated_targets, senders=senders, num_of_nodes=num_of_nodes
-        )
+        kwargs.update(target=repeated_targets, senders=senders, num_nodes=num_nodes)
         for graphs_out in all_graphs_out:
             output.append(self.route(graphs_out, kwargs))
         return output

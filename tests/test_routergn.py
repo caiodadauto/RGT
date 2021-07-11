@@ -1,4 +1,4 @@
-from routergn import __version__
+from rgt import __version__
 
 
 def test_version():

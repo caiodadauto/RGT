@@ -2,8 +2,8 @@ import argparse
 
 from sonnet.optimizers import Adam, Momentum
 
-from routergn.supervised.training import RGTOptimizer
-from routergn.supervised.models import RoutingGraphTransformer
+from rgt.training import EstimatorRGT
+from rgt.model import RoutingGraphTransformer
 
 
 def optimizer(s):
@@ -47,7 +47,7 @@ def run(
     model = RoutingGraphTransformer(
         num_of_msg=msgs, num_of_heads_core=heads, num_of_heads_routing=heads
     )
-    rgtopt = RGTOptimizer(
+    rgtopt = EstimatorRGT(
         model,
         optimizer,
         file_ext,

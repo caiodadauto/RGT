@@ -123,7 +123,7 @@ def make_edge_encoder_routing(hidden_sizes, dropout_rate=0.32, alpha=0.2):
     return EdgeEncoderRouting(edge_model_fn)
 
 
-class CoreTransformer:
+class CoreTransformer(snt.Module):
     def __init__(
         self,
         num_heads,
@@ -136,7 +136,7 @@ class CoreTransformer:
         layer_norm_fn=make_layer_norm,
         name="RoutingGraphTransformer",
     ):
-        super(RoutingGraphTransformer, self).__init__(name=name)
+        super(CoreTransformer, self).__init__(name=name)
         edge_model_fn = partial(edge_model_fn, **edge_model_kwargs)
         node_model_fn = partial(node_model_fn, **node_model_kwargs)
         layer_norm_fn = partial(make_layer_norm, **layer_norm_kwargs)
@@ -174,7 +174,7 @@ class CoreTransformer:
             return self._layer_norm(residual_connection)
 
 
-class LinkTransformer:
+class LinkTransformer(snt.Module):
     def __init__(
         self,
         num_heads,
@@ -183,7 +183,7 @@ class LinkTransformer:
         edge_model_fn=make_edge_routing,
         name="RoutingGraphTransformer",
     ):
-        super(RoutingGraphTransformer, self).__init__(name=name)
+        super(LinkTransformer, self).__init__(name=name)
         edge_model_fn = partial(edge_model_fn, **edge_model_kwargs)
         embedding_model_fn = partial(
             make_edge_encoder_routing, **embed_multi_head_kwargs
@@ -191,7 +191,7 @@ class LinkTransformer:
 
         self._heads = []
         for _ in range(num_heads):
-            self._gr_heads.append(GraphRouter(edge_model_fn=edge_model_fn))
+            self._heads.append(GraphRouter(edge_model_fn=edge_model_fn))
         self._embedding_multi_head = GraphIndependent(edge_model_fn=embedding_model_fn)
 
     def __call__(self, graphs, kwargs):

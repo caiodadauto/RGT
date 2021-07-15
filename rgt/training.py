@@ -49,8 +49,8 @@ class EstimatorRGT(snt.Module):
         self._rs = np.random.RandomState(seed)
         super(EstimatorRGT, self).__init__(name="EstimatorRGT")
 
-        self._best_acc = 0
-        self._best_delta = np.infty
+        self._best_acc = tf.Variable(0, trainable=False)
+        self._best_delta = tf.Variable(np.infty, trainable=False)
         self._delta_time_validation = delta_time_validation
 
         self._model = rgt
@@ -68,14 +68,14 @@ class EstimatorRGT(snt.Module):
         self._lr = tf.Variable(init_lr, trainable=False, dtype=tf.float32, name="lr")
         self._step = tf.Variable(0, trainable=False, dtype=tf.float32, name="tr_step")
         self._opt = snt.optimizers.__getattribute__(optimizer)(learning_rate=self._lr)
-        self._schedule_lr_fn = tf.keras.optimizers.schedules.PolinomialDecay(
+        self._schedule_lr_fn = tf.keras.optimizers.schedules.PolynomialDecay(
             init_lr, decay_steps, end_lr, power=power, cycle=cycle
         )
 
         self._tr_path_data = tr_path_data
-        self._val_path_size = val_path_data
+        self._val_path_data = val_path_data
         self._input_fields = input_fields
-        self.batch_generator = partial(
+        self._batch_generator = partial(
             init_generator,
             scaler=scaler,
             random_state=self._rs,
@@ -83,13 +83,14 @@ class EstimatorRGT(snt.Module):
             input_fields=input_fields,
         )
 
-        if restore_path is None:
+        if restore_path is not None:
+            self._log_dir = os.path.join(log_path, restore_path)
+        else:
             self._log_dir = os.path.join(
                 log_path, datetime.now().strftime("%Y%m%d-%H%M%S")
             )
-        else:
-            self._log_dir = os.path.join(log_path, restore_path)
-        self.__set_managers(seed, restore_path is None)
+            os.makedirs(self._log_dir)
+        self.__set_managers(seed, restore_path is not None)
 
         if debug:
             tf.debugging.experimental.enable_dump_debug_info(
@@ -185,7 +186,7 @@ class EstimatorRGT(snt.Module):
         self._opt.apply(gradients, self._model.trainable_variables)
         self._step.assign_add(1)
         self._lr.assign(self._schedule_lr_fn(self._step))
-        return output_graphs[-1], loss.numpy()
+        return output_graphs[-1], loss
 
     def __eval(self, in_graphs):
         targets = in_graphs.globals
@@ -199,10 +200,10 @@ class EstimatorRGT(snt.Module):
         for in_graphs, gt_graphs, _ in val_generator:
             out_graphs = self._eval(in_graphs)
             acc.append(
-                get_accuracy(out_graphs[-1].edges.numpy(), gt_graphs.edges.numpy())
+                get_accuracy(out_graphs[-1].edges, gt_graphs.edges)
             )
-            loss.append(self._loss_fn(out_graphs, gt_graphs.edges).numpy())
-        return sum(acc) / len(acc), sum(loss) / len(loss)
+            loss.append(self._loss_fn(out_graphs, gt_graphs.edges))
+        return tf.reduce_sum(acc) / len(acc), tf.reduce_sum(loss) / len(loss)
 
     def __log_scalars(self, params):
         with self._writer_scalars.as_default():
@@ -233,31 +234,33 @@ class EstimatorRGT(snt.Module):
                 if delta_time >= self._delta_time_validation:
                     last_validation = time()
                     tr_acc = get_accuracy(
-                        tr_out_graphs.edges.numpy(), gt_graphs.edges.numpy()
+                        tr_out_graphs.edges, gt_graphs.edges
                     )
                     val_acc, val_loss = self.__assess_val()
-                    delta = np.abs(tr_loss, val_loss)
+                    delta = tf.abs(tr_loss - val_loss)
                     self.__log_scalars(
                         {
-                            "tr_loss": tf.constant(tr_loss),
-                            "tr_acc": tf.constant(tr_acc),
-                            "val_loss": tf.constant(val_loss),
-                            "val_acc": tf.constant(val_acc),
-                            "delta": tf.constant(delta),
+                            "tr_loss": tr_loss,
+                            "tr_acc": tr_acc,
+                            "val_loss": val_loss,
+                            "val_acc": val_acc,
+                            "delta": delta,
                             "lr": self._lr,
                         }
                     )
                     self._last_ckpt_manager.save()
                     if self._best_acc <= val_acc:
                         self._best_acc_ckpt_manager.save()
-                    if self._best_delta_acc >= delta:
+                        self._best_acc.assign(val_acc)
+                    if self._best_delta >= delta:
                         self._best_delta_ckpt_manager.save()
+                        self._best_delta.assign(delta)
                     epoch_bar.set_postfix(
                         epoch="{} / {}".format(epoch, self._num_epochs),
-                        tr_loss=tr_loss,
-                        val_loss=val_loss,
-                        best_acc=self._best_acc,
-                        best_delta=self._best_delta,
+                        tr_loss="{.4f}".format(tr_loss.numpy()),
+                        val_loss="{.4f}".format(val_loss.numpy()),
+                        best_acc="{.4f}".format(self._best_acc.numpy()),
+                        best_delta="{.4f}".format(self._best_delta.numpy()),
                     )
                 epoch_bar.update(in_graphs.n_node.shape[0])
             epoch_bar.close()

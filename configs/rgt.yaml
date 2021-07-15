@@ -44,9 +44,13 @@ model:
     hidden_sizes: [32, 32]
     dropout_rate: 0.32
     alpha: 0.2
+  layer_norm_gtt_kwargs:
+    axis: -1
+    scale: True
+    offset: True
 train:
   num_epochs: 60
-  optimizer: "adam"
+  optimizer: "Adam"
   init_lr: 1e-3
   end_lr: 1e-5
   decay_steps: 100000
@@ -60,11 +64,11 @@ train:
   file_ext: "gpickle"
   seed: 12345
   msg_ratio: 0.45
-  input_fields: None
+  input_fields: null
   class_weights: [0.4, 1.2]
   scaler: True
   delta_time_validation: 60
   log_path: "logs"
-  restore_path: None
+  restore_path: null
   compile: True
   debug: False

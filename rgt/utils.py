@@ -1,4 +1,5 @@
 import numpy as np
+import tensorflow as tf
 from sklearn.preprocessing import minmax_scale
 from sklearn.metrics import balanced_accuracy_score
 
@@ -40,7 +41,7 @@ def init_generator(
     return generator
 
 def get_accuracy(predicted, expected, th=0.5):
-    e = expected
-    p = (predicted >= th).astype(np.int32)
-    return balanced_accuracy_score(e, p)
+    e = expected.numpy()
+    p = (predicted.numpy() >= th).astype(np.int32)
+    return tf.constant(balanced_accuracy_score(e, p))
 

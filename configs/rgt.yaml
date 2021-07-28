@@ -41,7 +41,7 @@ model:
     edge_dim: 32
     node_dim: 32
   embed_routing_multi_head_kwargs:
-    hidden_sizes: [32, 32]
+    hidden_sizes: [32, 24, 16, 8, 1]
     dropout_rate: 0.32
     alpha: 0.2
   layer_norm_gtt_kwargs:

@@ -74,8 +74,8 @@ class EdgeEncoderRouting(snt.Module):
         denominator = tf.math.unsorted_segment_sum(data, senders, num_nodes)
         return data / tf.gather(denominator, senders)
 
-    def __call__(self, inputs, senders, num_nodes):
-        logist_out = tf.math.exp(self._edge_model(inputs))
+    def __call__(self, inputs, is_training, senders, num_nodes):
+        logist_out = tf.math.exp(self._edge_model(inputs, is_training))
         return self._sent_edges_softmax(logist_out, senders, num_nodes)
 
 
@@ -134,7 +134,7 @@ class CoreTransformer(snt.Module):
         edge_model_fn=make_edge_tau,
         node_model_fn=make_node_tau,
         layer_norm_fn=make_layer_norm,
-        name="RoutingGraphTransformer",
+        name="CoreTransformer",
     ):
         super(CoreTransformer, self).__init__(name=name)
         edge_model_fn = partial(edge_model_fn, **edge_model_kwargs)
@@ -162,16 +162,16 @@ class CoreTransformer(snt.Module):
             edge_model_fn=layer_norm_fn, node_model_fn=layer_norm_fn
         )
 
-        def __call__(self, graphs, kwargs):
-            heads_out = []
-            for gtt in self._gtt_heads:
-                heads_out.append(
-                    gtt(graphs, edge_model_kwargs=kwargs, node_model_kwargs=kwargs)
-                )
-            heads_out = utils.concat(heads_out, axis=-1, use_globals=False)
-            heads_out = self._embedding_multi_head(heads_out)
-            residual_connection = utils.sum([heads_out, graphs], use_globals=False)
-            return self._layer_norm(residual_connection)
+    def __call__(self, graphs, kwargs):
+        heads_out = []
+        for gtt in self._heads:
+            heads_out.append(
+                gtt(graphs, edge_model_kwargs=kwargs, node_model_kwargs=kwargs)
+            )
+        heads_out = utils.concat(heads_out, axis=-1, use_globals=False)
+        heads_out = self._embedding_multi_head(heads_out)
+        residual_connection = utils.sum([heads_out, graphs], use_globals=False)
+        return self._layer_norm(residual_connection)
 
 
 class LinkTransformer(snt.Module):
@@ -181,7 +181,7 @@ class LinkTransformer(snt.Module):
         edge_model_kwargs,
         embed_multi_head_kwargs,
         edge_model_fn=make_edge_routing,
-        name="RoutingGraphTransformer",
+        name="LinkTransformer",
     ):
         super(LinkTransformer, self).__init__(name=name)
         edge_model_fn = partial(edge_model_fn, **edge_model_kwargs)
@@ -199,9 +199,10 @@ class LinkTransformer(snt.Module):
         for gr in self._heads:
             heads_out.append(gr(graphs, edge_model_kwargs=kwargs))
         heads_out = utils.concat(heads_out, axis=-1, use_globals=False)
-        graphs = self._encoder_multi_head_gr(
+        graphs = self._embedding_multi_head(
             heads_out,
             edge_model_kwargs=dict(
+                is_training=kwargs["is_training"],
                 senders=kwargs["senders"],
                 num_nodes=kwargs["num_nodes"],
             ),
@@ -241,8 +242,6 @@ class RoutingGraphTransformer(snt.Module):
         edge_gr_fn = partial(edge_gr_fn, **edge_gr_kwargs)
         layer_norm_gtt_fn = partial(make_layer_norm, **layer_norm_gtt_kwargs)
 
-        self._gr_heads = []
-        self._gtt_heads = []
         self._num_msg = num_msg
         self._encoder = GraphIndependent(
             edge_model_fn=edge_independent_fn,

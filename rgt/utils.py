@@ -40,8 +40,8 @@ def init_generator(
     )
     return generator
 
-def get_accuracy(predicted, expected, th=0.5):
+def get_accuracy(expected, predicted, th=0.5):
     e = expected.numpy()
     p = (predicted.numpy() >= th).astype(np.int32)
-    return tf.constant(balanced_accuracy_score(e, p))
+    return tf.constant(balanced_accuracy_score(e, p), dtype=tf.float32)
 

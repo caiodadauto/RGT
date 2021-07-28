@@ -49,8 +49,8 @@ class EstimatorRGT(snt.Module):
         self._rs = np.random.RandomState(seed)
         super(EstimatorRGT, self).__init__(name="EstimatorRGT")
 
-        self._best_acc = tf.Variable(0, trainable=False)
-        self._best_delta = tf.Variable(np.infty, trainable=False)
+        self._best_acc = tf.Variable(0.0, trainable=False, dtype=tf.float32)
+        self._best_delta = tf.Variable(np.infty, trainable=False, dtype=tf.float32)
         self._delta_time_validation = delta_time_validation
 
         self._model = rgt
@@ -61,8 +61,8 @@ class EstimatorRGT(snt.Module):
         self._loss_fn = partial(
             binary_crossentropy,
             entity="edges",
-            class_weights=class_weights,
-            msg_ratio=msg_ratio,
+            class_weights=tf.constant(class_weights, dtype=tf.float32),
+            min_num_msg=tf.cast(tf.math.ceil(msg_ratio * self._model._num_msg), dtype=tf.int32),
         )
 
         self._lr = tf.Variable(init_lr, trainable=False, dtype=tf.float32, name="lr")
@@ -172,16 +172,10 @@ class EstimatorRGT(snt.Module):
             )
 
     def __update_model_weights(self, in_graphs, gt_graphs):
-        loss_for_all_mps = []
-        expected = gt_graphs.edges
         targets = in_graphs.globals
         with tf.GradientTape() as tape:
             output_graphs = self._model(in_graphs, targets, True)
-            for predicted_graphs in output_graphs:
-                predicted = predicted_graphs.edges
-                loss_for_all_mps.append(self._loss_fn(expected, predicted))
-            loss = tf.math.reduce_sum(tf.stack(loss_for_all_mps))
-            loss = loss / len(output_graphs)
+            loss = self._loss_fn(gt_graphs.edges, output_graphs)
         gradients = tape.gradient(loss, self._model.trainable_variables)
         self._opt.apply(gradients, self._model.trainable_variables)
         self._step.assign_add(1)
@@ -191,7 +185,7 @@ class EstimatorRGT(snt.Module):
     def __eval(self, in_graphs):
         targets = in_graphs.globals
         output_graphs = self._model(in_graphs, targets, False)
-        return output_graphs[-1]
+        return output_graphs
 
     def __assess_val(self):
         acc = []
@@ -200,16 +194,16 @@ class EstimatorRGT(snt.Module):
         for in_graphs, gt_graphs, _ in val_generator:
             out_graphs = self._eval(in_graphs)
             acc.append(
-                get_accuracy(out_graphs[-1].edges, gt_graphs.edges)
+                get_accuracy(gt_graphs.edges, out_graphs[-1].edges)
             )
-            loss.append(self._loss_fn(out_graphs, gt_graphs.edges))
+            loss.append(self._loss_fn(gt_graphs.edges, out_graphs))
         return tf.reduce_sum(acc) / len(acc), tf.reduce_sum(loss) / len(loss)
 
     def __log_scalars(self, params):
         with self._writer_scalars.as_default():
             for name, value in params.items():
                 tf.summary.scalar(name, data=value, step=tf.cast(self._step, tf.int64))
-            self._writer_scalers.flush()
+            self._writer_scalars.flush()
 
     def train(self):
         start_time = time()
@@ -224,7 +218,7 @@ class EstimatorRGT(snt.Module):
             )
             epoch_bar.set_postfix(epoch="{} / {}".format(epoch, self._num_epochs))
             tr_generator = self._batch_generator(
-                self._tr_path_data, self._batch_size, size=self._tr_size
+                self._tr_path_data, self._tr_batch_size, size=self._tr_size
             )
             for in_graphs, gt_graphs, _ in tr_generator:
                 tr_out_graphs, tr_loss = self._update_model_weights(
@@ -234,7 +228,7 @@ class EstimatorRGT(snt.Module):
                 if delta_time >= self._delta_time_validation:
                     last_validation = time()
                     tr_acc = get_accuracy(
-                        tr_out_graphs.edges, gt_graphs.edges
+                        gt_graphs.edges, tr_out_graphs.edges
                     )
                     val_acc, val_loss = self.__assess_val()
                     delta = tf.abs(tr_loss - val_loss)
@@ -257,10 +251,10 @@ class EstimatorRGT(snt.Module):
                         self._best_delta.assign(delta)
                     epoch_bar.set_postfix(
                         epoch="{} / {}".format(epoch, self._num_epochs),
-                        tr_loss="{.4f}".format(tr_loss.numpy()),
-                        val_loss="{.4f}".format(val_loss.numpy()),
-                        best_acc="{.4f}".format(self._best_acc.numpy()),
-                        best_delta="{.4f}".format(self._best_delta.numpy()),
+                        tr_loss="{:.4f}".format(tr_loss.numpy()),
+                        val_loss="{:.4f}".format(val_loss.numpy()),
+                        best_acc="{:.4f}".format(self._best_acc.numpy()),
+                        best_delta="{:.4f}".format(self._best_delta.numpy()),
                     )
                 epoch_bar.update(in_graphs.n_node.shape[0])
             epoch_bar.close()

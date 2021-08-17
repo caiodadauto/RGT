@@ -1,10 +1,8 @@
 import hydra
-# import numpy as np
 from omegaconf import DictConfig, OmegaConf
 
 from rgt.training import EstimatorRGT
 from rgt.model import RoutingGraphTransformer
-# from rgt.utils import init_generator
 
 
 @hydra.main(config_path="configs", config_name="rgt")

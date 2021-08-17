@@ -16,7 +16,6 @@ model:
     key_hidden_sizes: [32, 24]
     query_hidden_sizes: [32, 24]
     value_hidden_sizes: [32, 24]
-    predecessor_dim:
     key_dropout_rate: 0.32
     key_alpha: 0.2
     query_dropout_rate: 0.32

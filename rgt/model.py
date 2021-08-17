@@ -5,11 +5,15 @@ import tensorflow as tf
 from graph_nets.utils_tf import repeat
 from graph_nets.modules import GraphIndependent
 
+from rgt.snt_modules import (
+    make_conv_ip,
+    make_edge_encoder_routing,
+    make_edge_routing,
+)
 import gn_contrib.utils as utils
 from gn_contrib.blocks import EdgeBlock
 from gn_contrib.gn_modules import GraphTopologyTranformer
 from gn_contrib.snt_modules import (
-    EdgeTau,
     make_leaky_relu_mlp,
     make_layer_norm,
     make_edge_tau,
@@ -20,8 +24,6 @@ from gn_contrib.snt_modules import (
 __all__ = [
     "RoutingGraphTransformer",
     "GraphRouter",
-    "EdgeRouting",
-    "EdgeEncoderRouting",
 ]
 
 
@@ -38,89 +40,6 @@ class GraphRouter(snt.Module):
         if edge_model_kwargs is None:
             edge_model_kwargs = {}
         return self._edge_block(graphs, edge_model_kwargs=edge_model_kwargs)
-
-
-class EdgeRouting(EdgeTau):
-    def _sent_edges_softmax(self, data, senders, num_nodes):
-        denominator = tf.math.unsorted_segment_sum(data, senders, num_nodes)
-        return data / tf.gather(denominator, senders)
-
-    def __call__(self, inputs, target, senders, num_nodes, is_training):
-        query = self._query_model(target, is_training)
-        key = self._key_model(inputs, is_training)
-        value = self._value_model(inputs, is_training)
-        alpha = tf.math.exp(
-            tf.math.sigmoid(
-                tf.math.reduce_sum(query * key, keepdims=True, axis=-1) / self._ratio
-            )
-        )
-        logist_out = tf.math.exp(
-            tf.math.tanh(
-                tf.math.reduce_sum(query * (alpha * value), keepdims=True, axis=-1)
-            )
-        )
-        # print("OUTPUT MULTIHEAD ROUTING ENCODER ===============================")
-        # print(logist_out.numpy().sum())
-        # print("END ===============================")
-        return self._sent_edges_softmax(logist_out, senders, num_nodes)
-
-
-class EdgeEncoderRouting(snt.Module):
-    def __init__(self, edge_model_fn, name="EdgeEncoderRouting"):
-        super(EdgeEncoderRouting, self).__init__(name=name)
-        self._edge_model = edge_model_fn()
-
-    def _sent_edges_softmax(self, data, senders, num_nodes):
-        denominator = tf.math.unsorted_segment_sum(data, senders, num_nodes)
-        return data / tf.gather(denominator, senders)
-
-    def __call__(self, inputs, is_training, senders, num_nodes):
-        logist_out = tf.math.exp(self._edge_model(inputs, is_training))
-        return self._sent_edges_softmax(logist_out, senders, num_nodes)
-
-
-def make_edge_routing(
-    key_hidden_sizes,
-    query_hidden_sizes,
-    value_hidden_sizes,
-    key_dropout_rate=0.32,
-    key_alpha=0.2,
-    query_dropout_rate=0.32,
-    query_alpha=0.2,
-    value_dropout_rate=0.32,
-    value_alpha=0.2,
-):
-    key_model_fn = partial(
-        make_leaky_relu_mlp,
-        key_hidden_sizes,
-        key_dropout_rate,
-        key_alpha,
-    )
-    query_model_fn = partial(
-        make_leaky_relu_mlp,
-        query_hidden_sizes,
-        query_dropout_rate,
-        query_alpha,
-    )
-    value_model_fn = partial(
-        make_leaky_relu_mlp,
-        value_hidden_sizes,
-        value_dropout_rate,
-        value_alpha,
-    )
-    return EdgeRouting(
-        key_model_fn, query_model_fn, value_model_fn, 0, key_hidden_sizes[-1]
-    )
-
-
-def make_edge_encoder_routing(hidden_sizes, dropout_rate=0.32, alpha=0.2):
-    edge_model_fn = partial(
-        make_leaky_relu_mlp,
-        hidden_sizes,
-        dropout_rate,
-        alpha,
-    )
-    return EdgeEncoderRouting(edge_model_fn)
 
 
 class CoreTransformer(snt.Module):
@@ -226,7 +145,7 @@ class RoutingGraphTransformer(snt.Module):
         embed_core_multi_head_kwargs,
         embed_routing_multi_head_kwargs,
         layer_norm_gtt_kwargs,
-        edge_independent_fn=make_leaky_relu_mlp,
+        edge_independent_fn=make_conv_ip,
         node_independent_fn=make_leaky_relu_mlp,
         edge_gtt_fn=make_edge_tau,
         node_gtt_fn=make_node_tau,

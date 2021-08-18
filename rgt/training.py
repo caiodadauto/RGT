@@ -11,7 +11,7 @@ import tensorflow as tf
 from graph_nets.utils_tf import specs_from_graphs_tuple
 from gn_contrib.train import binary_crossentropy
 
-from rgt.utils import init_generator, get_accuracy
+from rgt.utils import init_generator, get_bacc, get_f1, get_precision
 
 __all__ = ["EstimatorRGT"]
 
@@ -50,6 +50,8 @@ class EstimatorRGT(snt.Module):
         super(EstimatorRGT, self).__init__(name="EstimatorRGT")
 
         self._best_acc = tf.Variable(0.0, trainable=False, dtype=tf.float32)
+        self._best_f1 = tf.Variable(0.0, trainable=False, dtype=tf.float32)
+        self._best_precision = tf.Variable(0.0, trainable=False, dtype=tf.float32)
         self._best_delta = tf.Variable(np.infty, trainable=False, dtype=tf.float32)
         self._delta_time_validation = delta_time_validation
 
@@ -62,7 +64,9 @@ class EstimatorRGT(snt.Module):
             binary_crossentropy,
             entity="edges",
             class_weights=tf.constant(class_weights, dtype=tf.float32),
-            min_num_msg=tf.cast(tf.math.ceil(msg_ratio * self._model._num_msg), dtype=tf.int32),
+            min_num_msg=tf.cast(
+                tf.math.ceil(msg_ratio * self._model._num_msg), dtype=tf.int32
+            ),
         )
 
         self._lr = tf.Variable(init_lr, trainable=False, dtype=tf.float32, name="lr")
@@ -157,10 +161,16 @@ class EstimatorRGT(snt.Module):
             ckpt, os.path.join(self._log_dir, "last_ckpts"), max_to_keep=1
         )
         self._best_acc_ckpt_manager = tf.train.CheckpointManager(
-            ckpt, os.path.join(self._log_dir, "best_acc_ckpts"), max_to_keep=5
+            ckpt, os.path.join(self._log_dir, "best_acc_ckpts"), max_to_keep=3
+        )
+        self._best_f1_ckpt_manager = tf.train.CheckpointManager(
+            ckpt, os.path.join(self._log_dir, "best_f1_ckpts"), max_to_keep=3
+        )
+        self._best_precision_ckpt_manager = tf.train.CheckpointManager(
+            ckpt, os.path.join(self._log_dir, "best_precision_ckpts"), max_to_keep=3
         )
         self._best_delta_ckpt_manager = tf.train.CheckpointManager(
-            ckpt, os.path.join(self._log_dir, "best_delta_ckpts"), max_to_keep=5
+            ckpt, os.path.join(self._log_dir, "best_delta_ckpts"), max_to_keep=3
         )
         if restore:
             _ = ckpt.restore(self._last_ckpt_manager.latest_checkpoint)
@@ -189,15 +199,22 @@ class EstimatorRGT(snt.Module):
 
     def __assess_val(self):
         acc = []
+        f1 = []
+        precision = []
         loss = []
         val_generator = self._batch_generator(self._val_path_data, self._val_batch_size)
         for in_graphs, gt_graphs, _ in val_generator:
             out_graphs = self._eval(in_graphs)
-            acc.append(
-                get_accuracy(gt_graphs.edges, out_graphs[-1].edges)
-            )
+            acc.append(get_bacc(gt_graphs.edges, out_graphs[-1].edges))
+            f1.append(get_f1(gt_graphs.edges, out_graphs[-1].edges))
+            precision.append(get_precision(gt_graphs.edges, out_graphs[-1].edges))
             loss.append(self._loss_fn(gt_graphs.edges, out_graphs))
-        return tf.reduce_sum(acc) / len(acc), tf.reduce_sum(loss) / len(loss)
+        return (
+            tf.reduce_sum(acc) / len(acc),
+            tf.reduce_sum(f1) / len(f1),
+            tf.reduce_sum(precision) / len(precision),
+            tf.reduce_sum(loss) / len(loss),
+        )
 
     def __log_scalars(self, params):
         with self._writer_scalars.as_default():
@@ -227,17 +244,21 @@ class EstimatorRGT(snt.Module):
                 delta_time = time() - last_validation
                 if delta_time >= self._delta_time_validation:
                     last_validation = time()
-                    tr_acc = get_accuracy(
-                        gt_graphs.edges, tr_out_graphs.edges
-                    )
-                    val_acc, val_loss = self.__assess_val()
+                    tr_acc = get_bacc(gt_graphs.edges, tr_out_graphs.edges)
+                    tr_f1 = get_f1(gt_graphs.edges, tr_out_graphs.edges)
+                    tr_precision = get_precision(gt_graphs.edges, tr_out_graphs.edges)
+                    val_acc, val_f1, val_precision, val_loss = self.__assess_val()
                     delta = tf.abs(tr_loss - val_loss)
                     self.__log_scalars(
                         {
                             "tr_loss": tr_loss,
-                            "tr_acc": tr_acc,
+                            "tr_f1": tr_f1,
+                            "tr_bacc": tr_acc,
+                            "tr_precision": tr_precision,
                             "val_loss": val_loss,
-                            "val_acc": val_acc,
+                            "val_f1": val_f1,
+                            "val_bacc": val_acc,
+                            "val_precision": val_precision,
                             "delta": delta,
                             "lr": self._lr,
                         }
@@ -246,6 +267,12 @@ class EstimatorRGT(snt.Module):
                     if self._best_acc <= val_acc:
                         self._best_acc_ckpt_manager.save()
                         self._best_acc.assign(val_acc)
+                    if self._best_f1 <= val_f1:
+                        self._best_f1_ckpt_manager.save()
+                        self._best_f1.assign(val_f1)
+                    if self._best_precision <= val_precision:
+                        self._best_precision_ckpt_manager.save()
+                        self._best_precision.assign(val_precision)
                     if self._best_delta >= delta:
                         self._best_delta_ckpt_manager.save()
                         self._best_delta.assign(delta)
@@ -254,6 +281,8 @@ class EstimatorRGT(snt.Module):
                         tr_loss="{:.4f}".format(tr_loss.numpy()),
                         val_loss="{:.4f}".format(val_loss.numpy()),
                         best_acc="{:.4f}".format(self._best_acc.numpy()),
+                        best_f1="{:.4f}".format(self._best_f1.numpy()),
+                        best_precision="{:.4f}".format(self._best_precision.numpy()),
                         best_delta="{:.4f}".format(self._best_delta.numpy()),
                     )
                 epoch_bar.update(in_graphs.n_node.shape[0])

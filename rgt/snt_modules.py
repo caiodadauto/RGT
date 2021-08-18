@@ -59,6 +59,7 @@ class ConvTarget(snt.Module):
         conv_kernel,
         conv_stride,
         conv_padding,
+        conv_dropout_rate,
         pool_ksize,
         pool_stride,
         pool_pedding,
@@ -68,13 +69,15 @@ class ConvTarget(snt.Module):
     ):
         super(ConvTarget, self).__init__(name=name)
         self._convs = []
-        self._pooling = partial(
-            tf.nn.max_pool1d,
-            ksize=pool_ksize,
-            strides=pool_stride,
-            padding=pool_pedding,
-        )
-
+        if pool_ksize is None or pool_stride is None or pool_pedding is None:
+            self._pooling = lambda x: x
+        else:
+            self._pooling = partial(
+                tf.nn.max_pool1d,
+                ksize=pool_ksize,
+                strides=pool_stride,
+                padding=pool_pedding,
+            )
         for output_channels, kernel, stride, padding in zip(
             conv_output_channels, conv_kernel, conv_stride, conv_padding
         ):
@@ -86,15 +89,18 @@ class ConvTarget(snt.Module):
                     padding=padding,
                 )
             )
+        self._dropout_rate = conv_dropout_rate
         self._layer_norm = snt.LayerNorm(-1, scale, offset)
 
-    def __call__(self, inputs):
+    def __call__(self, inputs, is_training):
         # Considering the that all IP bytes are concatenated
         outputs = tf.reshape(inputs, shape=(-1, 4, 2, 4))
-        outputs = tf.transpose(outputs, perm=[0, 2, 3, 1])
+        outputs = tf.transpose(outputs, perm=[0, 1, 3, 2])
         for conv in self._convs:
             outputs = conv(outputs)
             outputs = self._pooling(outputs)
+            if is_training:
+                outputs = tf.nn.dropout(outputs, rate=self._dropout_rate)
         outputs = self._layer_norm(snt.flatten(outputs))
         return outputs
 
@@ -106,12 +112,13 @@ class ConvEdgeIP(ConvTarget):
         conv_kernel,
         conv_stride,
         conv_padding,
+        conv_dropout_rate,
         pool_ksize,
         pool_stride,
         pool_pedding,
-        hidden_sizes,
-        dropout_rate,
-        alpha,
+        mlp_hidden_sizes,
+        mlp_dropout_rate,
+        mlp_alpha,
         scale=True,
         offset=True,
         name="ConvIP",
@@ -121,6 +128,7 @@ class ConvEdgeIP(ConvTarget):
             conv_kernel,
             conv_stride,
             conv_padding,
+            conv_dropout_rate,
             pool_ksize,
             pool_stride,
             pool_pedding,
@@ -129,21 +137,23 @@ class ConvEdgeIP(ConvTarget):
             name=name,
         )
         self._mlp = make_leaky_relu_mlp(
-            hidden_sizes=hidden_sizes, dropout_rate=dropout_rate, alpha=alpha
+            hidden_sizes=mlp_hidden_sizes, dropout_rate=mlp_dropout_rate, alpha=mlp_alpha
         )
         self._layer_norm = snt.LayerNorm(-1, scale, offset)
 
-    def __call__(self, inputs, **kwargs):
+    def __call__(self, inputs, is_training):
         # Considering the that all IP bytes are concatenated
         outputs = tf.reshape(inputs[:, :-1], shape=(-1, 4, 2, 4))
-        outputs = tf.transpose(outputs, perm=[0, 2, 3, 1])
+        outputs = tf.transpose(outputs, perm=[0, 1, 3, 2])
         edge_weights = tf.expand_dims(inputs[:, -1], axis=-1)
         for conv in self._convs:
             outputs = conv(outputs)
             outputs = self._pooling(outputs)
+            if is_training:
+                outputs = tf.nn.dropout(outputs, rate=self._dropout_rate)
         outputs = tf.concat([snt.flatten(outputs), edge_weights], axis=-1)
         outputs = self._layer_norm(outputs)
-        outputs = self._mlp(outputs, **kwargs)
+        outputs = self._mlp(outputs, is_training)
         return outputs
 
 
@@ -157,15 +167,13 @@ def make_edge_routing(
     query_pool_ksize,
     query_pool_stride,
     query_pool_pedding,
-    query_hidden_sizes,
     key_dropout_rate=0.32,
     key_alpha=0.2,
     value_dropout_rate=0.32,
     value_alpha=0.2,
-    query_dropout_rate=0.32,
-    query_alpha=0.2,
     query_scale=True,
     query_offset=True,
+    query_conv_dropout_rate=0.25,
 ):
     key_model_fn = partial(
         make_leaky_relu_mlp,
@@ -179,12 +187,10 @@ def make_edge_routing(
         query_conv_kernel,
         query_conv_stride,
         query_conv_padding,
+        query_conv_dropout_rate,
         query_pool_ksize,
         query_pool_stride,
         query_pool_pedding,
-        query_hidden_sizes,
-        query_dropout_rate,
-        query_alpha,
         query_scale,
         query_offset,
     )
@@ -214,12 +220,13 @@ def make_conv_ip(
     conv_kernel,
     conv_stride,
     conv_padding,
+    conv_dropout_rate,
     pool_ksize,
     pool_stride,
     pool_pedding,
-    hidden_size,
-    dropout_rate,
-    alpha,
+    mlp_hidden_sizes,
+    mlp_dropout_rate,
+    mlp_alpha,
     scale=True,
     offset=True,
 ):
@@ -228,12 +235,13 @@ def make_conv_ip(
         conv_kernel,
         conv_stride,
         conv_padding,
+        conv_dropout_rate,
         pool_ksize,
         pool_stride,
         pool_pedding,
-        hidden_size,
-        dropout_rate,
-        alpha,
+        mlp_hidden_sizes,
+        mlp_dropout_rate,
+        mlp_alpha,
         scale,
         offset,
     )

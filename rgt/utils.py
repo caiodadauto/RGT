@@ -1,7 +1,7 @@
 import numpy as np
 import tensorflow as tf
 from sklearn.preprocessing import minmax_scale
-from sklearn.metrics import balanced_accuracy_score
+from sklearn.metrics import balanced_accuracy_score, f1_score, precision_score
 
 import pytop
 from gn_contrib.utils import networkx_to_graph_tuple_generator
@@ -40,8 +40,20 @@ def init_generator(
     )
     return generator
 
-def get_accuracy(expected, predicted, th=0.5):
+
+def get_bacc(expected, predicted, th=0.5):
     e = expected.numpy()
     p = (predicted.numpy() >= th).astype(np.int32)
     return tf.constant(balanced_accuracy_score(e, p), dtype=tf.float32)
 
+
+def get_precision(expected, predicted, th=0.5):
+    e = expected.numpy()
+    p = (predicted.numpy() >= th).astype(np.int32)
+    return tf.constant(balanced_accuracy_score(e, p), dtype=tf.float32)
+
+
+def get_f1(expected, predicted, th=0.5):
+    e = expected.numpy()
+    p = (predicted.numpy() >= th).astype(np.int32)
+    return tf.constant(balanced_accuracy_score(e, p), dtype=tf.float32)

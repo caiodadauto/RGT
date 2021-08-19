@@ -67,17 +67,17 @@ model:
     offset: True
 train:
   num_epochs: 60
-  optimizer: "Adam"
+  optimizer: "RMSProp"
   init_lr: 1e-3
   end_lr: 1e-5
   decay_steps: 100000
   power: 0.8
   cycle: True
   tr_size: 1000000
-  tr_batch_size: 64
-  val_batch_size: 64
-  tr_path_data: "dataset/train/All"
-  val_path_data: "dataset/validation/All"
+  tr_batch_size: 32
+  val_batch_size: 32
+  tr_path_data: "/local1/caio/datasets/train/All"
+  val_path_data: "/local1/caio/datasets/validation/All"
   file_ext: "gpickle"
   seed: 12345
   msg_ratio: 0.45

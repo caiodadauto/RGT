@@ -50,10 +50,10 @@ def get_bacc(expected, predicted, th=0.5):
 def get_precision(expected, predicted, th=0.5):
     e = expected.numpy()
     p = (predicted.numpy() >= th).astype(np.int32)
-    return tf.constant(balanced_accuracy_score(e, p), dtype=tf.float32)
+    return tf.constant(precision_score(e, p), dtype=tf.float32)
 
 
 def get_f1(expected, predicted, th=0.5):
     e = expected.numpy()
     p = (predicted.numpy() >= th).astype(np.int32)
-    return tf.constant(balanced_accuracy_score(e, p), dtype=tf.float32)
+    return tf.constant(f1_score(e, p), dtype=tf.float32)

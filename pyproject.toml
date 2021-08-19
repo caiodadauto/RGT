@@ -5,11 +5,12 @@ description = ""
 authors = ["Caio Dadauto <caiodadauto@gmail.com>"]
 
 [tool.poetry.dependencies]
-python = ">=3.7.8"
-# graph-nets = {git = "https://github.com/caiodadauto/graph_nets.git", rev = "main"}
-# pytop = {git = "https://github.com/caiodadauto/pytop.git", rev = "master"}
-# tensorflow = "^2.4.1"
+python = ">=3.8,<3.11"
+graph-nets = {git = "https://github.com/caiodadauto/graph_nets.git", rev = "main"}
 hydra-core = "^1.1.0"
+tensorflow = "^2.6.0"
+dm-sonnet = "^2.0.0"
+numpy = ">=1.19.2,<1.20.0"
 
 [tool.poetry.dev-dependencies]
 pytest = "^5.2"

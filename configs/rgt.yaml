@@ -81,7 +81,8 @@ train:
   file_ext: "gpickle"
   seed: 12345
   msg_ratio: 0.45
-  input_fields: null
+  node_fields: ["pos", "in_degree", "out_degree"]
+  edge_fields: null
   class_weights: [0.4, 1.2]
   scaler: True
   delta_time_validation: 60

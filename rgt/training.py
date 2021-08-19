@@ -35,7 +35,8 @@ class EstimatorRGT(snt.Module):
         file_ext,
         seed,
         msg_ratio=0.45,
-        input_fields=None,
+        node_fields=None,
+        edge_fields=None,
         class_weights=[1.0, 1.0],
         scaler=True,
         delta_time_validation=60,
@@ -76,9 +77,17 @@ class EstimatorRGT(snt.Module):
             init_lr, decay_steps, end_lr, power=power, cycle=cycle
         )
 
+        if node_fields is None and edge_fields is None:
+            input_fields = None
+        else:
+            input_fields = dict()
+            if node_fields is not None:
+                input_fields['node'] = node_fields
+            if edge_fields is not None:
+                input_fields['edge'] = edge_fields
+        self._input_fields = input_fields
         self._tr_path_data = tr_path_data
         self._val_path_data = val_path_data
-        self._input_fields = input_fields
         self._batch_generator = partial(
             init_generator,
             scaler=scaler,

@@ -1,17 +1,19 @@
 import os
-import pickle
 from time import time
 from datetime import datetime
 from functools import partial
 
 import numpy as np
 import sonnet as snt
-from tqdm import tqdm
+import mlflow as mlf
 import tensorflow as tf
+from tqdm import tqdm
+from hydra.utils import get_original_cwd
 from graph_nets.utils_tf import specs_from_graphs_tuple
 from gn_contrib.train import binary_crossentropy
 
 from rgt.utils import init_generator, get_bacc, get_f1, get_precision
+from rgt.utils_mlf import save_pickle, load_pickle
 
 __all__ = ["EstimatorRGT"]
 
@@ -40,15 +42,30 @@ class EstimatorRGT(snt.Module):
         class_weights=[1.0, 1.0],
         scaler=True,
         delta_time_validation=60,
-        log_path="logs",
-        restore_path=None,
+        exp_name="Train RGT",
+        exp_tags=None,
+        run_tags=None,
+        run_id=None,
+        get_last_run=False,
         compile=False,
-        debug=False,
     ):
-        np.random.seed(seed)
-        tf.random.set_seed(seed)
-        self._rs = np.random.RandomState(seed)
         super(EstimatorRGT, self).__init__(name="EstimatorRGT")
+        self._run, self._experiment = self.set_mlflow(
+            exp_name, exp_tags, run_tags, run_id, get_last_run
+        )
+        if "seed" in self._run.data.params:
+            self._seed = self._run.data.params["seed"]
+            self._init_epoch = self._run.data.metrics["epoch"]
+            self._seen_graphs = self._run.data.metrics["graph"]
+            np.random.seed(self._seed)
+            self._rs = load_pickle("random_state", self._run)
+        else:
+            self._seed = seed
+            self._init_epoch = 0
+            self._seen_graphs = 0
+            np.random.seed(self._seed)
+            self._rs = np.random.RandomState(self._seed)
+        tf.random.set_seed(self._seed)
 
         self._best_acc = tf.Variable(0.0, trainable=False, dtype=tf.float32)
         self._best_f1 = tf.Variable(0.0, trainable=False, dtype=tf.float32)
@@ -82,9 +99,9 @@ class EstimatorRGT(snt.Module):
         else:
             input_fields = dict()
             if node_fields is not None:
-                input_fields['node'] = node_fields
+                input_fields["node"] = node_fields
             if edge_fields is not None:
-                input_fields['edge'] = edge_fields
+                input_fields["edge"] = edge_fields
         self._input_fields = input_fields
         self._tr_path_data = tr_path_data
         self._val_path_data = val_path_data
@@ -95,22 +112,7 @@ class EstimatorRGT(snt.Module):
             file_ext=file_ext,
             input_fields=input_fields,
         )
-
-        if restore_path is not None:
-            self._log_dir = os.path.join(log_path, restore_path)
-        else:
-            self._log_dir = os.path.join(
-                log_path, datetime.now().strftime("%Y%m%d-%H%M%S")
-            )
-            os.makedirs(self._log_dir)
-        self.__set_managers(seed, restore_path is not None)
-
-        if debug:
-            tf.debugging.experimental.enable_dump_debug_info(
-                dump_root=os.path.join(self._log_dir, "debug"),
-                tensor_debug_mode="FULL_HEALTH",
-                circular_buffer_size=-1,
-            )
+        self.set_managers()
 
         if compile:
             val_generator = self._batch_generator(
@@ -131,62 +133,80 @@ class EstimatorRGT(snt.Module):
             self._update_model_weights = self.__update_model_weights
             self._eval = self.__eval
 
-    def __save_random_state(self):
-        with open(os.path.join(self._log_dir, "random_state.pkl"), "wb") as f:
-            self._random_state = pickle.dump(self._random_state, f)
-
-    def __set_managers(self, seed, restore):
-        if restore:
-            with open(os.path.join(self._log_dir, "seed.csv"), "r") as f:
-                seed = int(f.readline().rstrip())
-            with open(os.path.join(self._log_dir, "random_state.pkl"), "rb") as f:
-                self._random_state = pickle.load(f)
-            with open(os.path.join(self._log_dir, "stopped_step.csv"), "r") as f:
-                try:
-                    self.init__epoch, self._seen_graphs = list(
-                        map(lambda s: int(s), f.readline().rstrip().split(","))
-                    )
-                except:
-                    raise ValueError("Session restore is not possible")
+    def set_mlflow(
+        self, exp_name, exp_tags=None, run_tags=None, run_id=None, get_last_run=False
+    ):
+        mlf.set_tracking_uri(f"file://{get_original_cwd()}/mlruns")
+        client = mlf.tracking.MlflowClient()
+        experiment = mlf.get_experiment_by_name(exp_name)
+        if experiment is None:
+            experiment_id = client.create_experiment(name=exp_name)
+            experiment = mlf.get_experiment(experiment_id)
+            if exp_tags is not None:
+                for name, tag in exp_tags.items():
+                    mlf.set_experiment_tag(experiment_id, name, tag)
         else:
-            self._init_epoch = 0
-            self._seen_graphs = 0
-            with open(os.path.join(self._log_dir, "random_state.csv"), "w") as f:
-                seed = f.write("{}\n".format(seed))
-            self._random_state = np.random.RandomState(seed)
+            experiment_id = experiment.experiment_id
+        if run_id is None and not get_last_run:
+            run = client.create_run(experiment_id=experiment_id, tags=run_tags)
+        elif not get_last_run:
+            run = mlf.get_run(run_id=run_id)
+        else:
+            run = mlf.search_runs(experiment_id, output_format="list")[0]
+        return run, experiment
 
-        tf.random.set_seed(seed)
-        self._writer_scalars = tf.summary.create_file_writer(
-            os.path.join(self._log_dir, "scalars")
-        )
+    def set_managers(self):
+        artifact_path = self._run.info.artifact_uri
+        last_path = os.path.join(artifact_path, "last_ckpts")
+        acc_path = os.path.join(artifact_path, "best_acc_ckpts")
+        precision_path = os.path.join(artifact_path, "best_precision_ckpts")
+        f1_path = os.path.join(artifact_path, "best_f1_ckpts")
+        delta_path = os.path.join(artifact_path, "last_ckpts")
         ckpt = tf.train.Checkpoint(
             step=self._step,
             optimizer=self._opt,
             model=self._model,
             best_acc=self._best_acc,
+            best_f1=self._best_f1,
+            best_precision=self._best_precision,
             best_delta=self._best_delta,
         )
         self._last_ckpt_manager = tf.train.CheckpointManager(
-            ckpt, os.path.join(self._log_dir, "last_ckpts"), max_to_keep=1
+            ckpt, last_path, max_to_keep=1
         )
         self._best_acc_ckpt_manager = tf.train.CheckpointManager(
-            ckpt, os.path.join(self._log_dir, "best_acc_ckpts"), max_to_keep=3
+            ckpt,
+            acc_path,
+            max_to_keep=3,
         )
         self._best_f1_ckpt_manager = tf.train.CheckpointManager(
-            ckpt, os.path.join(self._log_dir, "best_f1_ckpts"), max_to_keep=3
+            ckpt,
+            f1_path,
+            max_to_keep=3,
         )
         self._best_precision_ckpt_manager = tf.train.CheckpointManager(
-            ckpt, os.path.join(self._log_dir, "best_precision_ckpts"), max_to_keep=3
+            ckpt,
+            precision_path,
+            max_to_keep=3,
         )
         self._best_delta_ckpt_manager = tf.train.CheckpointManager(
-            ckpt, os.path.join(self._log_dir, "best_delta_ckpts"), max_to_keep=3
+            ckpt,
+            delta_path,
+            max_to_keep=3,
         )
-        if restore:
+        if os.path.isdir(last_path):
             _ = ckpt.restore(self._last_ckpt_manager.latest_checkpoint)
             print(
-                "\nRestore training from {}\n\tEpoch : {}, "
-                "Seen  Graphs : {}, Best Acc : {}, Best Delta : {}\n".format(
-                    self._log_dir, self._epoch, self._seen_graphs
+                "Restore training from {}\n\tEpoch : {}, "
+                "Seen Graphs : {}, Best Acc : {}, Best F1 : {}"
+                "Best Precision : {}, Best Delta : {}\n".format(
+                    last_path,
+                    self._best_acc.numpy(),
+                    self._best_f1.numpy(),
+                    self._best_precision.numpy(),
+                    self._best_delta.numpy(),
+                    self._init_epoch,
+                    self._seen_graphs,
                 )
             )
 
@@ -234,8 +254,9 @@ class EstimatorRGT(snt.Module):
     def train(self):
         start_time = time()
         last_validation = start_time
+        _ = mlf.start_run(run_id=self._run.info.run_id)
+        mlf.log_param("seed", self._seed)
         for epoch in range(self._init_epoch, self._num_epochs):
-            self.__save_random_state()
             epoch_bar = tqdm(
                 total=self._tr_size,
                 initial=self._seen_graphs,
@@ -244,7 +265,10 @@ class EstimatorRGT(snt.Module):
             )
             epoch_bar.set_postfix(epoch="{} / {}".format(epoch, self._num_epochs))
             tr_generator = self._batch_generator(
-                self._tr_path_data, self._tr_batch_size, size=self._tr_size
+                self._tr_path_data,
+                self._tr_batch_size,
+                size=self._tr_size,
+                seen_graphs=self._seen_graphs,
             )
             for in_graphs, gt_graphs, _ in tr_generator:
                 tr_out_graphs, tr_loss = self._update_model_weights(
@@ -258,18 +282,22 @@ class EstimatorRGT(snt.Module):
                     tr_precision = get_precision(gt_graphs.edges, tr_out_graphs.edges)
                     val_acc, val_f1, val_precision, val_loss = self.__assess_val()
                     delta = tf.abs(tr_loss - val_loss)
-                    self.__log_scalars(
+
+                    save_pickle("random_state", self._rs)
+                    mlf.log_metric("graph", self._seen_graphs)
+                    mlf.log_metric("epoch", epoch)
+                    mlf.log_metrics(
                         {
-                            "tr_loss": tr_loss,
-                            "tr_f1": tr_f1,
-                            "tr_bacc": tr_acc,
-                            "tr_precision": tr_precision,
-                            "val_loss": val_loss,
-                            "val_f1": val_f1,
-                            "val_bacc": val_acc,
-                            "val_precision": val_precision,
-                            "delta": delta,
-                            "lr": self._lr,
+                            "tr loss": tr_loss.numpy(),
+                            "tr f1": tr_f1.numpy(),
+                            "tr bacc": tr_acc.numpy(),
+                            "tr precision": tr_precision.numpy(),
+                            "val loss": val_loss.numpy(),
+                            "val f1": val_f1.numpy(),
+                            "val bacc": val_acc.numpy(),
+                            "val precision": val_precision.numpy(),
+                            "delta": delta.numpy(),
+                            "lr": self._lr.numpy(),
                         }
                     )
                     self._last_ckpt_manager.save()
@@ -294,5 +322,8 @@ class EstimatorRGT(snt.Module):
                         best_precision="{:.4f}".format(self._best_precision.numpy()),
                         best_delta="{:.4f}".format(self._best_delta.numpy()),
                     )
+                self._seen_graphs += in_graphs.n_node.shape[0]
                 epoch_bar.update(in_graphs.n_node.shape[0])
             epoch_bar.close()
+            self._seen_graphs = 0
+        mlf.end_run()

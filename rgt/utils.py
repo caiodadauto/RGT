@@ -7,7 +7,7 @@ import pytop
 from gn_contrib.utils import networkx_to_graph_tuple_generator
 
 
-__all__ = ["init_generator"]
+__all__ = ["init_generator", "get_bacc", "get_f1", "get_precision"]
 
 
 def init_generator(

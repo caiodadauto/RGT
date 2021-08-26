@@ -1,23 +1,21 @@
 import hydra
-from omegaconf import DictConfig, OmegaConf
+import mlflow as mlf
+from omegaconf import DictConfig
 
-from rgt.training import EstimatorRGT
-from rgt.gn_modules import RoutingGraphTransformer
-
+from rgt.training import Train
+from rgt.utils_mlf import set_mlflow
 
 @hydra.main(config_path="configs", config_name="rgt")
 def my_app(cfg: DictConfig) -> None:
-    model = RoutingGraphTransformer(**cfg.model)
-
-    # gen = init_generator(
-    #     cfg.train.tr_path_data, 10, True, np.random.RandomState(), "gpickle", size=80
-    # )
-    # in_graphs, _, _ = next(gen)
-    # targets = in_graphs.globals
-    # print(model(in_graphs, targets, True))
-
-    estimator = EstimatorRGT(model, **cfg.train)
-    estimator.train()
+    run = set_mlflow(
+        cfg.mlflow.exp_name,
+        cfg.mlflow.exp_tags,
+        cfg.mlflow.run_tags,
+        cfg.mlflow.run_id,
+        cfg.mlflow.get_last_run,
+    )
+    with mlf.start_run(run_id=run.info.run_id):
+        Train(cfg.model, cfg.estimator)
 
 
 if __name__ == "__main__":

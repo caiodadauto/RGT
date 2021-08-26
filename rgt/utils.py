@@ -20,6 +20,7 @@ def init_generator(
     size=None,
     input_fields=None,
 ):
+
     if scaler:
         _scaler = minmax_scale
     else:

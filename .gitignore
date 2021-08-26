@@ -1,3 +1,5 @@
+mlruns/
+.hydra/
 dist/
 poetry.lock
 logs/

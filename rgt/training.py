@@ -1,6 +1,5 @@
 import os
 from time import time
-from datetime import datetime
 from functools import partial
 
 import numpy as np
@@ -8,20 +7,36 @@ import sonnet as snt
 import mlflow as mlf
 import tensorflow as tf
 from tqdm import tqdm
-from hydra.utils import get_original_cwd
 from graph_nets.utils_tf import specs_from_graphs_tuple
 from gn_contrib.train import binary_crossentropy
 
+from rgt.gn_modules import RoutingGraphTransformer
 from rgt.utils import init_generator, get_bacc, get_f1, get_precision
-from rgt.utils_mlf import save_pickle, load_pickle
+from rgt.utils_mlf import save_pickle, load_pickle, log_params_from_omegaconf_dict
 
-__all__ = ["EstimatorRGT"]
+__all__ = ["EstimatorRGT", "Train"]
+
+
+class Train:
+    def __init__( self, cfg_model, cfg_estimator):
+        run = mlf.active_run()
+        start_epoch = run.data.metrics.get("epoch")
+        seen_graphs = run.data.metrics.get("graph")
+        start_epoch = int(start_epoch) if start_epoch is not None else 0
+        seen_graphs = int(seen_graphs) if seen_graphs is not None else 0
+        log_params_from_omegaconf_dict(cfg_model)
+        log_params_from_omegaconf_dict(cfg_estimator)
+        model = RoutingGraphTransformer(**cfg_model)
+        estimator = EstimatorRGT(model, start_epoch, seen_graphs, **cfg_estimator)
+        estimator.train()
 
 
 class EstimatorRGT(snt.Module):
     def __init__(
         self,
         rgt,
+        start_epoch,
+        seen_graphs,
         num_epochs,
         optimizer,
         init_lr,
@@ -42,30 +57,18 @@ class EstimatorRGT(snt.Module):
         class_weights=[1.0, 1.0],
         scaler=True,
         delta_time_validation=60,
-        exp_name="Train RGT",
-        exp_tags=None,
-        run_tags=None,
-        run_id=None,
-        get_last_run=False,
         compile=False,
     ):
         super(EstimatorRGT, self).__init__(name="EstimatorRGT")
-        self._run, self._experiment = self.set_mlflow(
-            exp_name, exp_tags, run_tags, run_id, get_last_run
-        )
-        if "seed" in self._run.data.params:
-            self._seed = self._run.data.params["seed"]
-            self._init_epoch = self._run.data.metrics["epoch"]
-            self._seen_graphs = self._run.data.metrics["graph"]
-            np.random.seed(self._seed)
-            self._rs = load_pickle("random_state", self._run)
-        else:
-            self._seed = seed
-            self._init_epoch = 0
-            self._seen_graphs = 0
-            np.random.seed(self._seed)
-            self._rs = np.random.RandomState(self._seed)
+        self._seed = seed
+        self._start_epoch = start_epoch
+        self._seen_graphs = seen_graphs
+        np.random.seed(self._seed)
         tf.random.set_seed(self._seed)
+        try:
+            self._rs = load_pickle("random_state")
+        except Exception:
+            self._rs = np.random.RandomState(self._seed)
 
         self._best_acc = tf.Variable(0.0, trainable=False, dtype=tf.float32)
         self._best_f1 = tf.Variable(0.0, trainable=False, dtype=tf.float32)
@@ -133,35 +136,13 @@ class EstimatorRGT(snt.Module):
             self._update_model_weights = self.__update_model_weights
             self._eval = self.__eval
 
-    def set_mlflow(
-        self, exp_name, exp_tags=None, run_tags=None, run_id=None, get_last_run=False
-    ):
-        mlf.set_tracking_uri(f"file://{get_original_cwd()}/mlruns")
-        client = mlf.tracking.MlflowClient()
-        experiment = mlf.get_experiment_by_name(exp_name)
-        if experiment is None:
-            experiment_id = client.create_experiment(name=exp_name)
-            experiment = mlf.get_experiment(experiment_id)
-            if exp_tags is not None:
-                for name, tag in exp_tags.items():
-                    mlf.set_experiment_tag(experiment_id, name, tag)
-        else:
-            experiment_id = experiment.experiment_id
-        if run_id is None and not get_last_run:
-            run = client.create_run(experiment_id=experiment_id, tags=run_tags)
-        elif not get_last_run:
-            run = mlf.get_run(run_id=run_id)
-        else:
-            run = mlf.search_runs(experiment_id, output_format="list")[0]
-        return run, experiment
-
     def set_managers(self):
-        artifact_path = self._run.info.artifact_uri
+        artifact_path = mlf.get_artifact_uri()
         last_path = os.path.join(artifact_path, "last_ckpts")
         acc_path = os.path.join(artifact_path, "best_acc_ckpts")
         precision_path = os.path.join(artifact_path, "best_precision_ckpts")
         f1_path = os.path.join(artifact_path, "best_f1_ckpts")
-        delta_path = os.path.join(artifact_path, "last_ckpts")
+        delta_path = os.path.join(artifact_path, "best_delta_ckpts")
         ckpt = tf.train.Checkpoint(
             step=self._step,
             optimizer=self._opt,
@@ -194,7 +175,7 @@ class EstimatorRGT(snt.Module):
             delta_path,
             max_to_keep=3,
         )
-        if os.path.isdir(last_path):
+        if os.path.isdir(os.path.normpath(last_path).split(":")[-1]):
             _ = ckpt.restore(self._last_ckpt_manager.latest_checkpoint)
             print(
                 "Restore training from {}\n\tEpoch : {}, "
@@ -205,7 +186,7 @@ class EstimatorRGT(snt.Module):
                     self._best_f1.numpy(),
                     self._best_precision.numpy(),
                     self._best_delta.numpy(),
-                    self._init_epoch,
+                    self._start_epoch,
                     self._seen_graphs,
                 )
             )
@@ -254,9 +235,7 @@ class EstimatorRGT(snt.Module):
     def train(self):
         start_time = time()
         last_validation = start_time
-        _ = mlf.start_run(run_id=self._run.info.run_id)
-        mlf.log_param("seed", self._seed)
-        for epoch in range(self._init_epoch, self._num_epochs):
+        for epoch in range(self._start_epoch, self._num_epochs):
             epoch_bar = tqdm(
                 total=self._tr_size,
                 initial=self._seen_graphs,
@@ -326,4 +305,3 @@ class EstimatorRGT(snt.Module):
                 epoch_bar.update(in_graphs.n_node.shape[0])
             epoch_bar.close()
             self._seen_graphs = 0
-        mlf.end_run()

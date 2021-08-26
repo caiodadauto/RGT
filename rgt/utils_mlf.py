@@ -3,6 +3,7 @@ import joblib
 import tempfile
 
 import mlflow as mlf
+from hydra.utils import get_original_cwd
 from omegaconf import DictConfig, ListConfig
 
 
@@ -33,7 +34,30 @@ def save_pickle(name, obj):
             joblib.dump(obj, f)
         mlf.log_artifact(path)
 
-def load_pickle(name, run):
-    artifact_path = os.path.normpath(run.info.artifact_uri).split(":")[-1]
-    path = os.path.join(artifact_path, f"{name}.pkl")
+def load_pickle(name):
+    path = mlf.get_artifact_uri(f"{name}.pkl").split(":")[-1]
     return joblib.load(path)
+
+def set_mlflow(
+    exp_name, exp_tags=None, run_tags=None, run_id=None, get_last_run=False
+):
+    mlf.set_tracking_uri(f"file://{get_original_cwd()}/mlruns")
+    client = mlf.tracking.MlflowClient()
+    experiment = mlf.get_experiment_by_name(exp_name)
+    if experiment is None:
+        experiment_id = client.create_experiment(name=exp_name)
+        experiment = mlf.get_experiment(experiment_id)
+        if exp_tags is not None:
+            for name, tag in exp_tags.items():
+                mlf.set_experiment_tag(experiment_id, name, tag)
+    else:
+        experiment_id = experiment.experiment_id
+    if run_id is None and not get_last_run:
+        run_tags = {} if run_tags is None else run_tags
+        run_tags = mlf.tracking.context.registry.resolve_tags(run_tags)
+        run = client.create_run(experiment_id=experiment_id, tags=run_tags)
+    elif not get_last_run:
+        run = mlf.get_run(run_id=run_id)
+    else:
+        run = mlf.search_runs(experiment_id, output_format="list")[0]
+    return run

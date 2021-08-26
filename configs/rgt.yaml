@@ -15,13 +15,13 @@ model:
   dept_core: 3
   dept_routing: 3
   edge_encoder_kwargs:
-    conv_output_channels: [32, 24, 16]
-    conv_stride: [1, 1, 1]
-    conv_kernel: [2, 2, 2]
-    conv_padding: ['VALID', 'VALID', 'VALID']
-    pool_ksize: null
-    pool_stride: null
-    pool_pedding: null
+    conv_output_channels: [16, 64]
+    conv_kernel: [4, 8]
+    conv_stride: [1, 8]
+    conv_padding: ['SAME', 'VALID']
+    pool_ksize: [null, 4]
+    pool_stride: [null, 4]
+    pool_padding: [null, 'SAME']
     conv_dropout_rate: 0.25
     mlp_hidden_sizes: [32, 24, 24]
     mlp_dropout_rate: 0.32
@@ -50,13 +50,13 @@ model:
   edge_gr_kwargs:
     key_hidden_sizes: [24]
     value_hidden_sizes: [24]
-    query_conv_output_channels: [32, 24, 24]
-    query_conv_kernel: [2, 2, 2]
-    query_conv_stride: [1, 1, 1]
-    query_conv_padding: ['VALID', 'VALID', 'VALID']
-    query_pool_ksize: null
-    query_pool_stride: null
-    query_pool_pedding: null
+    query_conv_output_channels: [32, 32, 24]
+    query_conv_kernel: [4, 8, 8]
+    query_conv_stride: [1, 1, 8]
+    query_conv_padding: ['SAME', 'SAME', 'VALID']
+    query_pool_ksize: [null, 4]
+    query_pool_stride: [null, 4]
+    query_pool_padding: [null, 'VALID']
     key_dropout_rate: 0.32
     key_alpha: 0.2
     value_dropout_rate: 0.32

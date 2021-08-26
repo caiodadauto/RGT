@@ -158,11 +158,6 @@ class EstimatorRGT(snt.Module):
         f1_path = os.path.join(artifact_path, "best_f1_ckpts")
         delta_path = os.path.join(artifact_path, "best_delta_ckpts")
 
-        test = mlf.models.Model(last_path)
-        print()
-        print(test)
-        print()
-
         ckpt = tf.train.Checkpoint(
             step=self._step,
             optimizer=self._opt,

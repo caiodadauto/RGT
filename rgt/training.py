@@ -1,5 +1,6 @@
 import os
 from time import time
+from datetime import datetime
 from functools import partial
 
 import numpy as np
@@ -7,28 +8,41 @@ import sonnet as snt
 import mlflow as mlf
 import tensorflow as tf
 from tqdm import tqdm
+from hydra.utils import get_original_cwd
 from graph_nets.utils_tf import specs_from_graphs_tuple
 from gn_contrib.train import binary_crossentropy
 
 from rgt.gn_modules import RoutingGraphTransformer
 from rgt.utils import init_generator, get_bacc, get_f1, get_precision
-from rgt.utils_mlf import save_pickle, load_pickle, log_params_from_omegaconf_dict
+from rgt.utils_mlf import save_pickle, load_pickle, log_params_from_omegaconf_dict, set_mlflow
 
 __all__ = ["EstimatorRGT", "Train"]
 
 
 class Train:
-    def __init__( self, cfg_model, cfg_estimator):
-        run = mlf.active_run()
-        start_epoch = run.data.metrics.get("epoch")
-        seen_graphs = run.data.metrics.get("graph")
+    def __init__(
+        self,
+        exp_name,
+        exp_tags,
+        run_tags,
+        run_id,
+        get_last_run,
+        cfg_model,
+        cfg_estimator,
+    ):
+        self._run = set_mlflow(
+            exp_name, exp_tags, run_tags, run_id, get_last_run
+        )
+        start_epoch = self._run.data.metrics.get("epoch")
+        seen_graphs = self._run.data.metrics.get("graph")
         start_epoch = int(start_epoch) if start_epoch is not None else 0
         seen_graphs = int(seen_graphs) if seen_graphs is not None else 0
-        log_params_from_omegaconf_dict(cfg_model)
-        log_params_from_omegaconf_dict(cfg_estimator)
-        model = RoutingGraphTransformer(**cfg_model)
-        estimator = EstimatorRGT(model, start_epoch, seen_graphs, **cfg_estimator)
-        estimator.train()
+        with mlf.start_run(run_id=self._run.info.run_id):
+            log_params_from_omegaconf_dict(cfg_model)
+            log_params_from_omegaconf_dict(cfg_estimator)
+            model = RoutingGraphTransformer(**cfg_model)
+            estimator = EstimatorRGT(model, start_epoch, seen_graphs, **cfg_estimator)
+            estimator.train()
 
 
 class EstimatorRGT(snt.Module):
@@ -143,6 +157,12 @@ class EstimatorRGT(snt.Module):
         precision_path = os.path.join(artifact_path, "best_precision_ckpts")
         f1_path = os.path.join(artifact_path, "best_f1_ckpts")
         delta_path = os.path.join(artifact_path, "best_delta_ckpts")
+
+        test = mlf.models.Model(last_path)
+        print()
+        print(test)
+        print()
+
         ckpt = tf.train.Checkpoint(
             step=self._step,
             optimizer=self._opt,

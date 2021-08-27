@@ -62,22 +62,14 @@ class ConvTarget(snt.Module):
         conv_dropout_rate,
         pool_ksize,
         pool_stride,
-        pool_pedding,
+        pool_padding,
         scale=True,
         offset=True,
-        name="ConvIP",
+        name="ConvTarget",
     ):
         super(ConvTarget, self).__init__(name=name)
         self._convs = []
-        if pool_ksize is None or pool_stride is None or pool_pedding is None:
-            self._pooling = lambda x: x
-        else:
-            self._pooling = partial(
-                tf.nn.max_pool1d,
-                ksize=pool_ksize,
-                strides=pool_stride,
-                padding=pool_pedding,
-            )
+        self._max_pool = []
         for output_channels, kernel, stride, padding in zip(
             conv_output_channels, conv_kernel, conv_stride, conv_padding
         ):
@@ -89,6 +81,20 @@ class ConvTarget(snt.Module):
                     padding=padding,
                 )
             )
+        if pool_ksize is None or pool_stride is None or pool_padding is None:
+            for _ in range(len(self._convs)):
+                self._max_pool.append(lambda x: x)
+        else:
+            for ksize, stride, padding in zip(pool_ksize, pool_stride, pool_padding):
+                for _ in range(len(self._convs)):
+                    self._max_pool.append(
+                        partial(
+                            tf.nn.max_pool2d,
+                            ksize=ksize,
+                            strides=stride,
+                            padding=padding,
+                        )
+                    )
         self._dropout_rate = conv_dropout_rate
         self._layer_norm = snt.LayerNorm(-1, scale, offset)
 
@@ -96,9 +102,9 @@ class ConvTarget(snt.Module):
         # Considering the that all IP bytes are concatenated
         outputs = tf.reshape(inputs, shape=(-1, 4, 2, 4))
         outputs = tf.transpose(outputs, perm=[0, 1, 3, 2])
-        for conv in self._convs:
+        for conv, max_pool in zip(self._convs, self._max_pools):
             outputs = conv(outputs)
-            outputs = self._pooling(outputs)
+            outputs = max_pool(outputs)
             if is_training:
                 outputs = tf.nn.dropout(outputs, rate=self._dropout_rate)
         outputs = self._layer_norm(snt.flatten(outputs))
@@ -115,7 +121,7 @@ class ConvEdgeIP(ConvTarget):
         conv_dropout_rate,
         pool_ksize,
         pool_stride,
-        pool_pedding,
+        pool_padding,
         mlp_hidden_sizes,
         mlp_dropout_rate,
         mlp_alpha,
@@ -131,13 +137,15 @@ class ConvEdgeIP(ConvTarget):
             conv_dropout_rate,
             pool_ksize,
             pool_stride,
-            pool_pedding,
+            pool_padding,
             scale=scale,
             offset=offset,
             name=name,
         )
         self._mlp = make_leaky_relu_mlp(
-            hidden_sizes=mlp_hidden_sizes, dropout_rate=mlp_dropout_rate, alpha=mlp_alpha
+            hidden_sizes=mlp_hidden_sizes,
+            dropout_rate=mlp_dropout_rate,
+            alpha=mlp_alpha,
         )
         self._layer_norm = snt.LayerNorm(-1, scale, offset)
 
@@ -146,9 +154,10 @@ class ConvEdgeIP(ConvTarget):
         outputs = tf.reshape(inputs[:, :-1], shape=(-1, 4, 2, 4))
         outputs = tf.transpose(outputs, perm=[0, 1, 3, 2])
         edge_weights = tf.expand_dims(inputs[:, -1], axis=-1)
-        for conv in self._convs:
+
+        for conv, max_pool in zip(self._convs, self._max_pools):
             outputs = conv(outputs)
-            outputs = self._pooling(outputs)
+            outputs = max_pool(outputs)
             if is_training:
                 outputs = tf.nn.dropout(outputs, rate=self._dropout_rate)
         outputs = tf.concat([snt.flatten(outputs), edge_weights], axis=-1)
@@ -166,7 +175,7 @@ def make_edge_routing(
     query_conv_padding,
     query_pool_ksize,
     query_pool_stride,
-    query_pool_pedding,
+    query_pool_padding,
     key_dropout_rate=0.32,
     key_alpha=0.2,
     value_dropout_rate=0.32,
@@ -190,7 +199,7 @@ def make_edge_routing(
         query_conv_dropout_rate,
         query_pool_ksize,
         query_pool_stride,
-        query_pool_pedding,
+        query_pool_padding,
         query_scale,
         query_offset,
     )
@@ -223,7 +232,7 @@ def make_conv_ip(
     conv_dropout_rate,
     pool_ksize,
     pool_stride,
-    pool_pedding,
+    pool_padding,
     mlp_hidden_sizes,
     mlp_dropout_rate,
     mlp_alpha,
@@ -238,7 +247,7 @@ def make_conv_ip(
         conv_dropout_rate,
         pool_ksize,
         pool_stride,
-        pool_pedding,
+        pool_padding,
         mlp_hidden_sizes,
         mlp_dropout_rate,
         mlp_alpha,

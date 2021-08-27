@@ -39,8 +39,6 @@ class EdgeRouting(EdgeTau):
         query = self._query_model(target, is_training)
         key = self._key_model(inputs, is_training)
         value = self._value_model(inputs, is_training)
-        print(query.shape)
-        print(key.shape)
         alpha = tf.math.exp(
             tf.math.sigmoid(
                 tf.math.reduce_sum(query * key, keepdims=True, axis=-1) / self._ratio
@@ -111,8 +109,6 @@ class ConvTarget(snt.Module):
             if is_training:
                 outputs = tf.nn.dropout(outputs, rate=self._dropout_rate)
         outputs = self._layer_norm(snt.flatten(outputs))
-        print(outputs.shape)
-        # FIXME: (340, 256) wrong shape
         return outputs
 
 

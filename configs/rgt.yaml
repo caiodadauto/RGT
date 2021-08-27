@@ -5,7 +5,8 @@ hydra:
 mlflow:
   exp_name: "training RGT"
   exp_tags: null
-  run_tags: null
+  run_tags:
+    branch: "conv1D"
   run_id: null
   get_last_run: false
 model:
@@ -54,9 +55,9 @@ model:
     query_conv_kernel: [4, 8, 8]
     query_conv_stride: [1, 1, 8]
     query_conv_padding: ['SAME', 'SAME', 'VALID']
-    query_pool_ksize: [null, 4]
-    query_pool_stride: [null, 4]
-    query_pool_padding: [null, 'VALID']
+    query_pool_ksize: [null, null, 4]
+    query_pool_stride: [null, null, 4]
+    query_pool_padding: [null, null, 'VALID']
     key_dropout_rate: 0.32
     key_alpha: 0.2
     value_dropout_rate: 0.32

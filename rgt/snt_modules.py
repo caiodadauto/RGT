@@ -65,7 +65,7 @@ class ConvTarget(snt.Module):
         pool_padding,
         scale=True,
         offset=True,
-        name="ConvIP",
+        name="ConvTarget",
     ):
         super(ConvTarget, self).__init__(name=name)
         self._convs = []
@@ -128,7 +128,7 @@ class ConvEdgeIP(ConvTarget):
         mlp_alpha,
         scale=True,
         offset=True,
-        name="ConvIP",
+        name="ConvEdgeIP",
     ):
         super(ConvEdgeIP, self).__init__(
             conv_output_channels,
